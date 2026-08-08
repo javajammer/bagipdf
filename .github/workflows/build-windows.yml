@@ -10,6 +10,7 @@ on:
 jobs:
   build-windows:
     runs-on: windows-latest
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -21,18 +22,20 @@ jobs:
           cache: 'npm'
           cache-dependency-path: webapp/package-lock.json
 
-      - name: Install dependencies
+      - name: Install Dependencies
         run: |
           cd webapp
-          npm ci
+          npm ci --ignore-scripts
 
       - name: Build Standalone Executable (.exe)
         run: |
           cd webapp
           npm run dist:win
 
-      - name: Upload Windows Executable Artifact
+      - name: Upload BagiPDF Executable Artifact
         uses: actions/upload-artifact@v4
         with:
           name: BagiPDF-Windows-x64
-          path: dist_electron/BagiPDF-v*.exe
+          path: |
+            dist_electron/BagiPDF-v*.exe
+            webapp/dist_electron/BagiPDF-v*.exe
