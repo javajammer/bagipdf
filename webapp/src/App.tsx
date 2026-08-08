@@ -589,7 +589,7 @@ export default function App() {
 
             <div>
               <h3 className="text-lg font-bold text-white">BagiPDF</h3>
-              <p className="text-xs text-slate-400 mt-1">Versi 1.2.0 • Native Desktop Application</p>
+              <p className="text-xs text-slate-400 mt-1">Versi 1.2.1 • Native Desktop Application</p>
             </div>
 
             <div className="w-full bg-slate-900/60 border border-slate-700/50 rounded-xl p-4 text-xs text-slate-300 space-y-2.5 text-left">
