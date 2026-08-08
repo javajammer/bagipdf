@@ -27,6 +27,7 @@
       ],
       "icon": "public/vite.svg"
     },
+    "npmRebuild": false,
     "portable": {
       "artifactName": "BagiPDF-v${version}.exe"
     }

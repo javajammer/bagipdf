@@ -18,7 +18,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: 20
           cache: 'npm'
           cache-dependency-path: webapp/package-lock.json
 
@@ -30,7 +30,7 @@ jobs:
       - name: Build Standalone Executable (.exe)
         run: |
           cd webapp
-          npm run dist:win
+          npm run dist:win -- -c.npmRebuild=false
 
       - name: Upload BagiPDF Executable Artifact
         uses: actions/upload-artifact@v4
