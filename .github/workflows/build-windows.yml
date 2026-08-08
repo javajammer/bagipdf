@@ -30,7 +30,7 @@ jobs:
       - name: Build Standalone Executable (.exe)
         run: |
           cd webapp
-          npm run dist:win -- -c.npmRebuild=false
+          npm run dist:win
 
       - name: Upload BagiPDF Executable Artifact
         uses: actions/upload-artifact@v4

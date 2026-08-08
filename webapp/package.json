@@ -14,6 +14,9 @@
   "build": {
     "appId": "com.bagipdf.app",
     "productName": "BagiPDF",
+    "npmRebuild": false,
+    "buildDependenciesFromSource": false,
+    "nodeGypRebuild": false,
     "directories": {
       "output": "../dist_electron"
     },
@@ -27,7 +30,6 @@
       ],
       "icon": "public/vite.svg"
     },
-    "npmRebuild": false,
     "portable": {
       "artifactName": "BagiPDF-v${version}.exe"
     }
