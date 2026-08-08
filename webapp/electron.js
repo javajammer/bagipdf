@@ -7,11 +7,13 @@ function createWindow() {
     height: 800,
     minWidth: 950,
     minHeight: 650,
-    title: 'PDF Splitter Pro - iLovePDF Full Features',
+    title: 'BagiPDF',
     autoHideMenuBar: true,
     webPreferences: {
-      nodeIntegration: true,
-      contextIsolation: false,
+      nodeIntegration: false,
+      contextIsolation: true,
+      webSecurity: true,
+      sandbox: true,
     },
   });
 
