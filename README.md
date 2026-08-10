@@ -7,7 +7,7 @@ Aplikasi desktop modern GUI untuk memotong/memisahkan file PDF dengan fitur leng
 ## 👨‍💻 Informasi Pengembang & Versioning
 
 - **Nama Aplikasi**: BagiPDF
-- **Versi**: `v1.1.0`
+- **Versi**: `v1.2.2`
 - **Pengembang**: Franky Setiawan
 - **Website**: [https://www.frm.web.id](https://www.frm.web.id)
 
@@ -34,13 +34,13 @@ Aplikasi desktop modern GUI untuk memotong/memisahkan file PDF dengan fitur leng
 
 ---
 
-## 🛠️ Cara Membuat / Build File `.exe` Standalone (`BagiPDF-v1.1.0.exe`)
+## 🛠️ Cara Membuat / Build File `.exe` Standalone (`BagiPDF-v1.2.2.exe`)
 
 ### Metode 1: Menggunakan GitHub Actions (Otomatis & Tanpa Install Apapun)
 1. Push repositori ini ke GitHub.
 2. Buka tab **Actions** di repositori GitHub Anda.
 3. Jalankan workflow **Build Windows Executable (BagiPDF)**.
-4. Setelah selesai, unduh artifact `BagiPDF-Windows-x64` yang berisi file `BagiPDF-v1.1.0.exe`.
+4. Setelah selesai, unduh artifact `BagiPDF-Windows-x64` yang berisi file `BagiPDF-v1.2.2.exe`.
 
 ### Metode 2: Kompilasi Lokal (OS Windows)
 Jalankan perintah berikut di PowerShell / Command Prompt pada lingkungan Windows:
@@ -51,4 +51,4 @@ npm install
 npm run dist:win
 ```
 
-Hasil file executable akan berada di folder `dist_electron/BagiPDF-v1.1.0.exe`.
+Hasil file executable akan berada di folder `dist_electron/BagiPDF-v1.2.2.exe`.

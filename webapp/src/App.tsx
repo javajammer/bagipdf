@@ -12,7 +12,11 @@ import {
   Globe,
   User,
   X,
-  Split
+  Split,
+  Lock,
+  Eye,
+  EyeOff,
+  Key
 } from 'lucide-react';
 
 import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.min.js?url';
@@ -34,6 +38,17 @@ export default function App() {
   const [loading, setLoading] = useState<boolean>(false);
   const [statusMsg, setStatusMsg] = useState<string>('');
   const [showAbout, setShowAbout] = useState<boolean>(false);
+
+  // Password State for Input PDF
+  const [pdfPassword, setPdfPassword] = useState<string>('');
+  const [showPdfPassword, setShowPdfPassword] = useState<boolean>(false);
+  const [isEncrypted, setIsEncrypted] = useState<boolean>(false);
+
+  // Password Prompt Modal State
+  const [showPasswordModal, setShowPasswordModal] = useState<boolean>(false);
+  const [modalPasswordInput, setModalPasswordInput] = useState<string>('');
+  const [modalError, setModalError] = useState<string>('');
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
 
   // Custom Range State
   const [customRanges, setCustomRanges] = useState<string>('1-2, 3-4');
@@ -63,19 +78,51 @@ export default function App() {
     }
   };
 
-  const loadPdf = async (pdfFile: File) => {
+  const loadPdf = async (pdfFile: File, overridePwd?: string) => {
     setLoading(true);
     setStatusMsg('Membaca PDF & Rendering Pratinjau...');
+    setModalError('');
+    const pwdToUse = overridePwd !== undefined ? overridePwd : pdfPassword;
+
     try {
       setFile(pdfFile);
       const arrayBuffer = await pdfFile.arrayBuffer();
-      const loadedPdf = await PDFDocument.load(arrayBuffer);
+
+      // Load with ignoreEncryption: true to bypass pdf-lib page copy restrictions
+      let loadedPdf: PDFDocument;
+      try {
+        loadedPdf = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
+      } catch (pdfLibErr: any) {
+        throw pdfLibErr;
+      }
+
       setPdfDoc(loadedPdf);
       const count = loadedPdf.getPageCount();
       setTotalPages(count);
 
-      // Render thumbnails using PDF.js
-      const pdfJsDoc = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+      // Render thumbnails using PDF.js with password authentication
+      let pdfJsDoc;
+      try {
+        pdfJsDoc = await pdfjsLib.getDocument({ data: arrayBuffer, password: pwdToUse }).promise;
+      } catch (pdfJsErr: any) {
+        if (
+          pdfJsErr?.name === 'PasswordException' || 
+          pdfJsErr?.code === 1 || 
+          pdfJsErr?.code === 2 ||
+          (pdfJsErr?.message || '').toLowerCase().includes('password')
+        ) {
+          setIsEncrypted(true);
+          setPendingFile(pdfFile);
+          setShowPasswordModal(true);
+          if (overridePwd !== undefined && overridePwd !== '') {
+            setModalError('Kata sandi salah. Silakan coba lagi.');
+          }
+          setLoading(false);
+          return;
+        }
+        throw pdfJsErr;
+      }
+
       const thumbs: PageThumb[] = [];
 
       for (let i = 1; i <= count; i++) {
@@ -94,13 +141,27 @@ export default function App() {
           });
         }
       }
+
       setThumbnails(thumbs);
+      setIsEncrypted(!!pwdToUse);
+      setShowPasswordModal(false);
+      setModalPasswordInput('');
+      setModalError('');
+      if (overridePwd !== undefined) {
+        setPdfPassword(overridePwd);
+      }
       setStatusMsg('');
     } catch (err: any) {
       alert('Gagal membaca file PDF: ' + err.message);
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleModalPasswordSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!pendingFile) return;
+    await loadPdf(pendingFile, modalPasswordInput);
   };
 
   const parseRanges = (str: string, total: number): number[][] => {
@@ -135,7 +196,6 @@ export default function App() {
     if (bytesOrBlob instanceof Blob) {
       blob = bytesOrBlob;
     } else {
-      // Copy to clean standalone ArrayBuffer for strict PDF reader & Edge compatibility
       const cleanArray = new Uint8Array(bytesOrBlob.length);
       cleanArray.set(bytesOrBlob);
       blob = new Blob([cleanArray.buffer], { type: mimeType });
@@ -147,7 +207,6 @@ export default function App() {
     a.style.display = 'none';
     document.body.appendChild(a);
     
-    // Explicit MouseEvent dispatch for Microsoft Edge / Chromium compatibility
     const clickEvent = new MouseEvent('click', {
       view: window,
       bubbles: true,
@@ -315,7 +374,7 @@ export default function App() {
       {/* Main Container */}
       <main className="flex-1 flex p-5 gap-5 overflow-hidden">
         {/* macOS Left Sidebar Panel */}
-        <aside className="w-[340px] bg-[#2B2B36]/90 border border-slate-700/40 rounded-xl p-4 flex flex-col gap-4 shadow-xl backdrop-blur-xl flex-shrink-0">
+        <aside className="w-[340px] bg-[#2B2B36]/90 border border-slate-700/40 rounded-xl p-4 flex flex-col gap-4 shadow-xl backdrop-blur-xl flex-shrink-0 overflow-y-auto">
           
           {/* File Upload Box */}
           <div 
@@ -336,7 +395,12 @@ export default function App() {
               <div className="w-full">
                 <p className="font-medium text-xs text-indigo-200 truncate max-w-[260px] mx-auto">{file.name}</p>
                 <p className="text-[11px] text-slate-400 mt-0.5">{totalPages} Halaman • {(file.size / (1024*1024)).toFixed(2)} MB</p>
-                <span className="inline-block mt-2 text-[10px] bg-indigo-600/30 text-indigo-300 px-2 py-0.5 rounded border border-indigo-500/30">Klik untuk mengganti PDF</span>
+                {isEncrypted && (
+                  <span className="inline-flex items-center gap-1 mt-1.5 text-[10px] bg-amber-500/20 text-amber-300 px-2 py-0.5 rounded border border-amber-500/30">
+                    <Lock className="w-3 h-3" /> PDF Dilindungi Kata Sandi
+                  </span>
+                )}
+                <span className="block mt-2 text-[10px] bg-indigo-600/30 text-indigo-300 px-2 py-0.5 rounded border border-indigo-500/30">Klik untuk mengganti PDF</span>
               </div>
             ) : (
               <div>
@@ -353,6 +417,51 @@ export default function App() {
             onChange={handleFileChange} 
             className="hidden" 
           />
+
+          {/* Password Section */}
+          <div className="bg-slate-900/60 border border-slate-700/50 rounded-xl p-3.5 flex flex-col gap-2.5">
+            <div className="flex items-center justify-between text-xs font-semibold text-slate-300">
+              <span className="flex items-center gap-1.5">
+                <Lock className="w-3.5 h-3.5 text-indigo-400" />
+                <span>Kata Sandi PDF</span>
+              </span>
+              {isEncrypted && (
+                <span className="text-[10px] bg-amber-500/20 text-amber-300 px-1.5 py-0.5 rounded font-normal">
+                  File Terkunci
+                </span>
+              )}
+            </div>
+
+            <div>
+              <p className="text-[11px] text-slate-400 mb-1.5">
+                Masukkan password untuk membuka PDF terenkripsi:
+              </p>
+              <div className="relative flex items-center">
+                <input 
+                  type={showPdfPassword ? "text" : "password"} 
+                  value={pdfPassword}
+                  onChange={(e) => setPdfPassword(e.target.value)}
+                  placeholder="Masukkan password PDF..."
+                  className="w-full bg-slate-950/80 border border-slate-700/80 rounded-lg pl-3 pr-8 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+                />
+                <button 
+                  type="button"
+                  onClick={() => setShowPdfPassword(!showPdfPassword)}
+                  className="absolute right-2 text-slate-400 hover:text-slate-200"
+                >
+                  {showPdfPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                </button>
+              </div>
+              {file && (
+                <button 
+                  onClick={() => loadPdf(file, pdfPassword)}
+                  className="mt-2 w-full text-[11px] bg-slate-800 hover:bg-slate-700 text-indigo-300 py-1 rounded border border-slate-700 transition font-medium"
+                >
+                  Terapkan / Buka Ulang PDF
+                </button>
+              )}
+            </div>
+          </div>
 
           {/* Mode Selector Tabs */}
           <div className="flex flex-col flex-1 gap-3.5">
@@ -572,6 +681,75 @@ export default function App() {
         </section>
       </main>
 
+      {/* Password Prompt Modal Dialog */}
+      {showPasswordModal && (
+        <div className="fixed inset-0 bg-black/75 backdrop-blur-md z-50 flex items-center justify-center p-4">
+          <form 
+            onSubmit={handleModalPasswordSubmit}
+            className="bg-[#2B2B36] border border-slate-700/80 rounded-2xl w-full max-w-sm p-6 shadow-2xl relative text-center flex flex-col items-center gap-4"
+          >
+            <div className="w-14 h-14 bg-amber-500/20 text-amber-400 rounded-2xl flex items-center justify-center border border-amber-500/30 shadow-inner">
+              <Key className="w-7 h-7" />
+            </div>
+
+            <div>
+              <h3 className="text-base font-bold text-white">PDF Dilindungi Kata Sandi</h3>
+              <p className="text-xs text-slate-400 mt-1">
+                Dokumen <span className="text-indigo-300 font-medium">{pendingFile?.name}</span> memerlukan kata sandi untuk dibuka.
+              </p>
+            </div>
+
+            {modalError && (
+              <div className="w-full text-xs text-red-400 bg-red-500/10 border border-red-500/20 px-3 py-1.5 rounded-lg">
+                {modalError}
+              </div>
+            )}
+
+            <div className="w-full space-y-1 text-left">
+              <label className="text-[11px] text-slate-300 font-medium">Kata Sandi PDF</label>
+              <div className="relative flex items-center">
+                <input 
+                  type={showPdfPassword ? "text" : "password"} 
+                  value={modalPasswordInput}
+                  onChange={(e) => setModalPasswordInput(e.target.value)}
+                  placeholder="Masukkan kata sandi..."
+                  autoFocus
+                  className="w-full bg-slate-950/80 border border-slate-700/80 rounded-lg pl-3 pr-8 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+                />
+                <button 
+                  type="button"
+                  onClick={() => setShowPdfPassword(!showPdfPassword)}
+                  className="absolute right-2.5 text-slate-400 hover:text-slate-200"
+                >
+                  {showPdfPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+
+            <div className="flex gap-2.5 w-full mt-1">
+              <button 
+                type="button"
+                onClick={() => {
+                  setShowPasswordModal(false);
+                  setPendingFile(null);
+                  setFile(null);
+                }}
+                className="flex-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 font-medium py-2 rounded-lg text-xs transition"
+              >
+                Batal
+              </button>
+              <button 
+                type="submit"
+                className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-2 rounded-lg text-xs shadow-md transition flex items-center justify-center gap-1.5"
+              >
+                <Lock className="w-3.5 h-3.5" />
+                <span>Buka PDF</span>
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
       {/* About Modal Dialog (macOS Style) */}
       {showAbout && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
@@ -589,7 +767,7 @@ export default function App() {
 
             <div>
               <h3 className="text-lg font-bold text-white">BagiPDF</h3>
-              <p className="text-xs text-slate-400 mt-1">Versi 1.2.1 • Native Desktop Application</p>
+              <p className="text-xs text-slate-400 mt-1">Versi 1.2.2 • Native Desktop Application</p>
             </div>
 
             <div className="w-full bg-slate-900/60 border border-slate-700/50 rounded-xl p-4 text-xs text-slate-300 space-y-2.5 text-left">
