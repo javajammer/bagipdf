@@ -224,57 +224,72 @@ export default function App() {
     await loadPdf(pendingFile, modalPasswordInput);
   };
 
+  // WinAnsi character sanitizer for pdf-lib standard fonts
+  const sanitizeWinAnsi = (str: string) => {
+    if (!str) return '';
+    return str
+      .replace(/[“”]/g, '"')
+      .replace(/[‘’]/g, "'")
+      .replace(/—/g, '-')
+      .replace(/[^\x00-\x7F]/g, '');
+  };
+
   // Helper download blob function
   const downloadBlob = (bytesOrBlob: Uint8Array | Blob, fileName: string, mimeType = 'application/pdf') => {
-    let blob: Blob;
-    if (bytesOrBlob instanceof Blob) {
-      blob = bytesOrBlob;
-    } else {
-      const cleanArray = new Uint8Array(bytesOrBlob.length);
-      cleanArray.set(bytesOrBlob);
-      blob = new Blob([cleanArray.buffer], { type: mimeType });
-    }
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = fileName;
-    a.style.display = 'none';
-    document.body.appendChild(a);
-    
-    const clickEvent = new MouseEvent('click', {
-      view: window,
-      bubbles: true,
-      cancelable: true
-    });
-    a.dispatchEvent(clickEvent);
+    try {
+      let blob: Blob;
+      if (bytesOrBlob instanceof Blob) {
+        blob = bytesOrBlob;
+      } else {
+        const cleanArray = new Uint8Array(bytesOrBlob.length);
+        cleanArray.set(bytesOrBlob);
+        blob = new Blob([cleanArray.buffer], { type: mimeType });
+      }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
 
-    setTimeout(() => {
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    }, 2000);
+      setTimeout(() => {
+        if (document.body.contains(a)) {
+          document.body.removeChild(a);
+        }
+        URL.revokeObjectURL(url);
+      }, 2000);
+    } catch (err: any) {
+      alert('Gagal mengunduh file: ' + err.message);
+    }
   };
 
   const hexToRgb = (hex: string) => {
     const cleanHex = hex.replace('#', '');
-    const r = parseInt(cleanHex.substring(0, 2), 16) / 255 || 0;
-    const g = parseInt(cleanHex.substring(2, 4), 16) / 255 || 0;
-    const b = parseInt(cleanHex.substring(4, 6), 16) / 255 || 0;
+    const bigint = parseInt(cleanHex, 16);
+    const r = ((bigint >> 16) & 255) / 255;
+    const g = ((bigint >> 8) & 255) / 255;
+    const b = (bigint & 255) / 255;
     return rgb(r, g, b);
   };
 
-  // --- SPLIT PDF LOGIC ---
+  // Parse page range inputs like "1-3, 5, 8-10" safely
   const parseRanges = (str: string, total: number): number[][] => {
     const result: number[][] = [];
-    const parts = str.split(',');
-    for (let part of parts) {
-      part = part.trim();
-      if (!part) continue;
+    const parts = str.split(',').map(s => s.trim()).filter(Boolean);
+    if (parts.length === 0) {
+      throw new Error('Masukkan rentang halaman terlebih dahulu (contoh: 1-3, 5).');
+    }
+    for (const part of parts) {
       if (part.includes('-')) {
-        const [startStr, endStr] = part.split('-');
-        const start = parseInt(startStr.trim(), 10);
-        const end = parseInt(endStr.trim(), 10);
+        const rangeParts = part.split('-').map(s => s.trim());
+        if (rangeParts.length !== 2) {
+          throw new Error(`Format rentang halaman tidak valid: "${part}"`);
+        }
+        const start = parseInt(rangeParts[0], 10);
+        const end = parseInt(rangeParts[1], 10);
         if (isNaN(start) || isNaN(end) || start < 1 || end > total || start > end) {
-          throw new Error(`Rentang halaman tidak valid: "${part}"`);
+          throw new Error(`Rentang halaman tidak valid (1-${total}): "${part}"`);
         }
         const rangeList: number[] = [];
         for (let i = start - 1; i < end; i++) rangeList.push(i);
@@ -282,7 +297,7 @@ export default function App() {
       } else {
         const p = parseInt(part, 10);
         if (isNaN(p) || p < 1 || p > total) {
-          throw new Error(`Halaman di luar jangkauan: "${part}"`);
+          throw new Error(`Halaman di luar jangkauan (1-${total}): "${part}"`);
         }
         result.push([p - 1]);
       }
@@ -527,7 +542,8 @@ export default function App() {
         const { width, height } = page.getSize();
 
         if (watermarkType === 'text') {
-          const textWidth = font.widthOfTextAtSize(watermarkText, watermarkFontSize);
+          const cleanText = sanitizeWinAnsi(watermarkText) || 'WATERMARK';
+          const textWidth = font.widthOfTextAtSize(cleanText, watermarkFontSize);
           const textHeight = font.heightAtSize(watermarkFontSize);
 
           let x = (width - textWidth) / 2;
@@ -539,7 +555,7 @@ export default function App() {
             y = 50;
           }
 
-          page.drawText(watermarkText, {
+          page.drawText(cleanText, {
             x,
             y,
             size: watermarkFontSize,
@@ -624,7 +640,10 @@ export default function App() {
         const y = ((100 - ann.yPercent) / 100) * height;
         const colorRgb = hexToRgb(ann.color);
 
-        page.drawText(ann.text, {
+        const cleanText = sanitizeWinAnsi(ann.text);
+        if (!cleanText) continue;
+
+        page.drawText(cleanText, {
           x,
           y,
           size: ann.fontSize,
