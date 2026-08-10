@@ -1,4 +1,4 @@
-name: Build Windows Executable (BagiPDF)
+name: Build Windows Executable (BagiPDF Rust & Tauri v2.0.0)
 
 on:
   push:
@@ -22,6 +22,9 @@ jobs:
           cache: 'npm'
           cache-dependency-path: webapp/package-lock.json
 
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Install Dependencies
         run: |
           cd webapp
@@ -39,3 +42,4 @@ jobs:
           path: |
             dist_electron/BagiPDF-v*.exe
             webapp/dist_electron/BagiPDF-v*.exe
+            webapp/src-tauri/target/release/bundle/**/*.exe

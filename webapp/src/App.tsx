@@ -1,7 +1,8 @@
 import React, { useState, useRef } from 'react';
-import { PDFDocument } from 'pdf-lib';
+import { PDFDocument, StandardFonts, rgb, degrees } from 'pdf-lib';
 import * as pdfjsLib from 'pdfjs-dist';
 import JSZip from 'jszip';
+import * as XLSX from 'xlsx';
 import { 
   UploadCloud, 
   Grid, 
@@ -16,7 +17,19 @@ import {
   Lock,
   Eye,
   EyeOff,
-  Key
+  Key,
+  Layers,
+  Stamp,
+  Edit3,
+  FileSpreadsheet,
+  ArrowUp,
+  ArrowDown,
+  Trash2,
+  Plus,
+  Type,
+  Image as ImageIcon,
+  Check,
+  Move
 } from 'lucide-react';
 
 import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.min.js?url';
@@ -27,14 +40,38 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 interface PageThumb {
   pageIndex: number;
   dataUrl: string;
+  width: number;
+  height: number;
 }
 
+interface MergeFileItem {
+  id: string;
+  file: File;
+  totalPages: number;
+  sizeMB: string;
+}
+
+interface PDFAnnotation {
+  id: string;
+  pageIndex: number;
+  text: string;
+  xPercent: number;
+  yPercent: number;
+  fontSize: number;
+  color: string;
+}
+
+type MainToolMode = 'split' | 'merge' | 'watermark' | 'edit' | 'excel';
+
 export default function App() {
+  // Navigation Tool Suite Mode
+  const [mainTool, setMainTool] = useState<MainToolMode>('split');
+
+  // Common File State
   const [file, setFile] = useState<File | null>(null);
   const [pdfDoc, setPdfDoc] = useState<PDFDocument | null>(null);
   const [totalPages, setTotalPages] = useState<number>(0);
   const [thumbnails, setThumbnails] = useState<PageThumb[]>([]);
-  const [activeTab, setActiveTab] = useState<'custom' | 'fixed' | 'extract' | 'size'>('custom');
   const [loading, setLoading] = useState<boolean>(false);
   const [statusMsg, setStatusMsg] = useState<string>('');
   const [showAbout, setShowAbout] = useState<boolean>(false);
@@ -50,22 +87,44 @@ export default function App() {
   const [modalError, setModalError] = useState<string>('');
   const [pendingFile, setPendingFile] = useState<File | null>(null);
 
-  // Custom Range State
+  // --- SPLIT MODE STATE ---
+  const [activeSplitTab, setActiveSplitTab] = useState<'custom' | 'fixed' | 'extract' | 'size'>('custom');
   const [customRanges, setCustomRanges] = useState<string>('1-2, 3-4');
   const [mergeCustom, setMergeCustom] = useState<boolean>(false);
-
-  // Fixed Range State
   const [fixedStep, setFixedStep] = useState<number>(1);
-
-  // Extract Pages State
   const [extractMode, setExtractMode] = useState<'all' | 'select'>('all');
   const [extractPagesStr, setExtractPagesStr] = useState<string>('1, 3');
   const [mergeExtract, setMergeExtract] = useState<boolean>(true);
-
-  // Size Split State
   const [targetMB, setTargetMB] = useState<number>(2);
 
+  // --- MERGE MODE STATE ---
+  const [mergeFiles, setMergeFiles] = useState<MergeFileItem[]>([]);
+
+  // --- WATERMARK MODE STATE ---
+  const [watermarkType, setWatermarkType] = useState<'text' | 'image'>('text');
+  const [watermarkText, setWatermarkText] = useState<string>('CONFIDENTIAL');
+  const [watermarkFontSize, setWatermarkFontSize] = useState<number>(48);
+  const [watermarkOpacity, setWatermarkOpacity] = useState<number>(0.3);
+  const [watermarkRotation, setWatermarkRotation] = useState<number>(45);
+  const [watermarkColor, setWatermarkColor] = useState<string>('#EF4444');
+  const [watermarkPosition, setWatermarkPosition] = useState<'center' | 'top' | 'bottom' | 'diagonal'>('center');
+  const [watermarkImageFile, setWatermarkImageFile] = useState<File | null>(null);
+  const [watermarkImagePreview, setWatermarkImagePreview] = useState<string | null>(null);
+
+  // --- EDIT PDF STATE ---
+  const [annotations, setAnnotations] = useState<PDFAnnotation[]>([]);
+  const [selectedPageIndex, setSelectedPageIndex] = useState<number>(0);
+  const [annotationInput, setAnnotationInput] = useState<string>('Catatan PDF');
+  const [annotationFontSize, setAnnotationFontSize] = useState<number>(18);
+  const [annotationColor, setAnnotationColor] = useState<string>('#2563EB');
+
+  // --- PDF TO EXCEL STATE ---
+  const [excelData, setExcelData] = useState<string[][]>([]);
+  const [isExtractingExcel, setIsExtractingExcel] = useState<boolean>(false);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const mergeFileInputRef = useRef<HTMLInputElement>(null);
+  const watermarkImgInputRef = useRef<HTMLInputElement>(null);
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -88,7 +147,6 @@ export default function App() {
       setFile(pdfFile);
       const arrayBuffer = await pdfFile.arrayBuffer();
 
-      // Load with ignoreEncryption: true to bypass pdf-lib page copy restrictions
       let loadedPdf: PDFDocument;
       try {
         loadedPdf = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
@@ -100,7 +158,7 @@ export default function App() {
       const count = loadedPdf.getPageCount();
       setTotalPages(count);
 
-      // Render thumbnails using PDF.js with password authentication
+      // Render thumbnails using PDF.js
       let pdfJsDoc;
       try {
         pdfJsDoc = await pdfjsLib.getDocument({ data: arrayBuffer, password: pwdToUse }).promise;
@@ -137,7 +195,9 @@ export default function App() {
           await page.render({ canvasContext: context, viewport }).promise;
           thumbs.push({
             pageIndex: i - 1,
-            dataUrl: canvas.toDataURL('image/jpeg', 0.85)
+            dataUrl: canvas.toDataURL('image/jpeg', 0.85),
+            width: viewport.width,
+            height: viewport.height
           });
         }
       }
@@ -164,33 +224,7 @@ export default function App() {
     await loadPdf(pendingFile, modalPasswordInput);
   };
 
-  const parseRanges = (str: string, total: number): number[][] => {
-    const result: number[][] = [];
-    const parts = str.split(',');
-    for (let part of parts) {
-      part = part.trim();
-      if (!part) continue;
-      if (part.includes('-')) {
-        const [startStr, endStr] = part.split('-');
-        const start = parseInt(startStr.trim(), 10);
-        const end = parseInt(endStr.trim(), 10);
-        if (isNaN(start) || isNaN(end) || start < 1 || end > total || start > end) {
-          throw new Error(`Rentang halaman tidak valid: "${part}"`);
-        }
-        const rangeList: number[] = [];
-        for (let i = start - 1; i < end; i++) rangeList.push(i);
-        result.push(rangeList);
-      } else {
-        const p = parseInt(part, 10);
-        if (isNaN(p) || p < 1 || p > total) {
-          throw new Error(`Halaman di luar jangkauan: "${part}"`);
-        }
-        result.push([p - 1]);
-      }
-    }
-    return result;
-  };
-
+  // Helper download blob function
   const downloadBlob = (bytesOrBlob: Uint8Array | Blob, fileName: string, mimeType = 'application/pdf') => {
     let blob: Blob;
     if (bytesOrBlob instanceof Blob) {
@@ -220,6 +254,42 @@ export default function App() {
     }, 2000);
   };
 
+  const hexToRgb = (hex: string) => {
+    const cleanHex = hex.replace('#', '');
+    const r = parseInt(cleanHex.substring(0, 2), 16) / 255 || 0;
+    const g = parseInt(cleanHex.substring(2, 4), 16) / 255 || 0;
+    const b = parseInt(cleanHex.substring(4, 6), 16) / 255 || 0;
+    return rgb(r, g, b);
+  };
+
+  // --- SPLIT PDF LOGIC ---
+  const parseRanges = (str: string, total: number): number[][] => {
+    const result: number[][] = [];
+    const parts = str.split(',');
+    for (let part of parts) {
+      part = part.trim();
+      if (!part) continue;
+      if (part.includes('-')) {
+        const [startStr, endStr] = part.split('-');
+        const start = parseInt(startStr.trim(), 10);
+        const end = parseInt(endStr.trim(), 10);
+        if (isNaN(start) || isNaN(end) || start < 1 || end > total || start > end) {
+          throw new Error(`Rentang halaman tidak valid: "${part}"`);
+        }
+        const rangeList: number[] = [];
+        for (let i = start - 1; i < end; i++) rangeList.push(i);
+        result.push(rangeList);
+      } else {
+        const p = parseInt(part, 10);
+        if (isNaN(p) || p < 1 || p > total) {
+          throw new Error(`Halaman di luar jangkauan: "${part}"`);
+        }
+        result.push([p - 1]);
+      }
+    }
+    return result;
+  };
+
   const handleExecuteSplit = async () => {
     if (!file || !pdfDoc) return;
     setLoading(true);
@@ -230,7 +300,7 @@ export default function App() {
       const zip = new JSZip();
       let generatedFiles: { name: string; bytes: Uint8Array }[] = [];
 
-      if (activeTab === 'custom') {
+      if (activeSplitTab === 'custom') {
         const ranges = parseRanges(customRanges, totalPages);
         if (mergeCustom) {
           const newPdf = await PDFDocument.create();
@@ -251,7 +321,7 @@ export default function App() {
             generatedFiles.push({ name: `${baseName}_range_${idx + 1}.pdf`, bytes: pdfBytes });
           }
         }
-      } else if (activeTab === 'fixed') {
+      } else if (activeSplitTab === 'fixed') {
         const step = Math.max(1, fixedStep);
         let part = 1;
         for (let i = 0; i < totalPages; i += step) {
@@ -263,7 +333,7 @@ export default function App() {
           generatedFiles.push({ name: `${baseName}_part_${part}.pdf`, bytes: pdfBytes });
           part++;
         }
-      } else if (activeTab === 'extract') {
+      } else if (activeSplitTab === 'extract') {
         if (extractMode === 'all') {
           for (let i = 0; i < totalPages; i++) {
             const newPdf = await PDFDocument.create();
@@ -294,7 +364,7 @@ export default function App() {
             }
           }
         }
-      } else if (activeTab === 'size') {
+      } else if (activeSplitTab === 'size') {
         const targetBytes = targetMB * 1024 * 1024;
         let part = 1;
         let currentPdf = await PDFDocument.create();
@@ -342,6 +412,307 @@ export default function App() {
     }
   };
 
+  // --- MERGE PDF LOGIC ---
+  const handleMergeFilesAdd = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files) return;
+    const selectedFiles = Array.from(e.target.files).filter(f => f.type === 'application/pdf');
+    if (selectedFiles.length === 0) return;
+
+    setLoading(true);
+    setStatusMsg('Membaca file PDF...');
+
+    const newItems: MergeFileItem[] = [];
+    for (const f of selectedFiles) {
+      try {
+        const ab = await f.arrayBuffer();
+        const doc = await PDFDocument.load(ab, { ignoreEncryption: true });
+        newItems.push({
+          id: Math.random().toString(36).substring(2, 9),
+          file: f,
+          totalPages: doc.getPageCount(),
+          sizeMB: (f.size / (1024 * 1024)).toFixed(2)
+        });
+      } catch (err) {
+        console.warn('Gagal membaca PDF:', f.name, err);
+      }
+    }
+
+    setMergeFiles(prev => [...prev, ...newItems]);
+    setLoading(false);
+    setStatusMsg('');
+  };
+
+  const moveMergeFile = (index: number, direction: 'up' | 'down') => {
+    const targetIndex = direction === 'up' ? index - 1 : index + 1;
+    if (targetIndex < 0 || targetIndex >= mergeFiles.length) return;
+    const updated = [...mergeFiles];
+    const temp = updated[index];
+    updated[index] = updated[targetIndex];
+    updated[targetIndex] = temp;
+    setMergeFiles(updated);
+  };
+
+  const removeMergeFile = (index: number) => {
+    setMergeFiles(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const handleExecuteMerge = async () => {
+    if (mergeFiles.length < 2) {
+      alert('Harap pilih minimal 2 file PDF untuk digabungkan!');
+      return;
+    }
+
+    setLoading(true);
+    setStatusMsg('Menggabungkan seluruh file PDF...');
+
+    try {
+      const mergedPdf = await PDFDocument.create();
+      for (const item of mergeFiles) {
+        const arrayBuffer = await item.file.arrayBuffer();
+        const srcDoc = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
+        const pageIndices = srcDoc.getPageIndices();
+        const copiedPages = await mergedPdf.copyPages(srcDoc, pageIndices);
+        copiedPages.forEach(p => mergedPdf.addPage(p));
+      }
+
+      const mergedBytes = await mergedPdf.save();
+      downloadBlob(mergedBytes, 'BagiPDF_Merged_Document.pdf');
+    } catch (err: any) {
+      alert('Gagal menggabungkan PDF: ' + err.message);
+    } finally {
+      setLoading(false);
+      setStatusMsg('');
+    }
+  };
+
+  // --- WATERMARK PDF LOGIC ---
+  const handleWatermarkImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      const imgFile = e.target.files[0];
+      setWatermarkImageFile(imgFile);
+      const reader = new FileReader();
+      reader.onload = (event) => setWatermarkImagePreview(event.target?.result as string);
+      reader.readAsDataURL(imgFile);
+    }
+  };
+
+  const handleExecuteWatermark = async () => {
+    if (!file) {
+      alert('Harap pilih file PDF terlebih dahulu!');
+      return;
+    }
+
+    setLoading(true);
+    setStatusMsg('Menerapkan Watermark pada PDF...');
+
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      const doc = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
+      const pages = doc.getPages();
+
+      let embeddedImage: any = null;
+      if (watermarkType === 'image' && watermarkImageFile) {
+        const imgBuffer = await watermarkImageFile.arrayBuffer();
+        if (watermarkImageFile.type.includes('png')) {
+          embeddedImage = await doc.embedPng(imgBuffer);
+        } else {
+          embeddedImage = await doc.embedJpg(imgBuffer);
+        }
+      }
+
+      const font = await doc.embedFont(StandardFonts.HelveticaBold);
+      const watermarkColorRgb = hexToRgb(watermarkColor);
+
+      for (const page of pages) {
+        const { width, height } = page.getSize();
+
+        if (watermarkType === 'text') {
+          const textWidth = font.widthOfTextAtSize(watermarkText, watermarkFontSize);
+          const textHeight = font.heightAtSize(watermarkFontSize);
+
+          let x = (width - textWidth) / 2;
+          let y = (height - textHeight) / 2;
+
+          if (watermarkPosition === 'top') {
+            y = height - textHeight - 50;
+          } else if (watermarkPosition === 'bottom') {
+            y = 50;
+          }
+
+          page.drawText(watermarkText, {
+            x,
+            y,
+            size: watermarkFontSize,
+            font,
+            color: watermarkColorRgb,
+            opacity: watermarkOpacity,
+            rotate: degrees(watermarkRotation)
+          });
+        } else if (watermarkType === 'image' && embeddedImage) {
+          const imgWidth = 200;
+          const imgScale = embeddedImage.height / embeddedImage.width;
+          const imgHeight = imgWidth * imgScale;
+
+          const x = (width - imgWidth) / 2;
+          const y = (height - imgHeight) / 2;
+
+          page.drawImage(embeddedImage, {
+            x,
+            y,
+            width: imgWidth,
+            height: imgHeight,
+            opacity: watermarkOpacity,
+            rotate: degrees(watermarkRotation)
+          });
+        }
+      }
+
+      const wmBytes = await doc.save();
+      const baseName = file.name.replace(/\.[^/.]+$/, '');
+      downloadBlob(wmBytes, `${baseName}_watermarked.pdf`);
+    } catch (err: any) {
+      alert('Gagal menerapkan Watermark: ' + err.message);
+    } finally {
+      setLoading(false);
+      setStatusMsg('');
+    }
+  };
+
+  // --- EDIT PDF LOGIC ---
+  const handleAddAnnotation = () => {
+    if (!annotationInput.trim()) return;
+    const newAnn: PDFAnnotation = {
+      id: Math.random().toString(36).substring(2, 9),
+      pageIndex: selectedPageIndex,
+      text: annotationInput.trim(),
+      xPercent: 50,
+      yPercent: 50,
+      fontSize: annotationFontSize,
+      color: annotationColor
+    };
+    setAnnotations(prev => [...prev, newAnn]);
+  };
+
+  const handleRemoveAnnotation = (id: string) => {
+    setAnnotations(prev => prev.filter(a => a.id !== id));
+  };
+
+  const handleExecuteEditPdf = async () => {
+    if (!file) {
+      alert('Harap pilih file PDF terlebih dahulu!');
+      return;
+    }
+    if (annotations.length === 0) {
+      alert('Belum ada teks/catatan yang ditambahkan ke PDF!');
+      return;
+    }
+
+    setLoading(true);
+    setStatusMsg('Menyimpan perubahan catatan pada PDF...');
+
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      const doc = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
+      const font = await doc.embedFont(StandardFonts.HelveticaBold);
+
+      for (const ann of annotations) {
+        if (ann.pageIndex >= doc.getPageCount()) continue;
+        const page = doc.getPage(ann.pageIndex);
+        const { width, height } = page.getSize();
+
+        const x = (ann.xPercent / 100) * width;
+        const y = ((100 - ann.yPercent) / 100) * height;
+        const colorRgb = hexToRgb(ann.color);
+
+        page.drawText(ann.text, {
+          x,
+          y,
+          size: ann.fontSize,
+          font,
+          color: colorRgb
+        });
+      }
+
+      const editedBytes = await doc.save();
+      const baseName = file.name.replace(/\.[^/.]+$/, '');
+      downloadBlob(editedBytes, `${baseName}_edited.pdf`);
+    } catch (err: any) {
+      alert('Gagal menyimpan hasil edit PDF: ' + err.message);
+    } finally {
+      setLoading(false);
+      setStatusMsg('');
+    }
+  };
+
+  // --- PDF TO EXCEL LOGIC ---
+  const handleExtractPdfToExcel = async () => {
+    if (!file) {
+      alert('Harap pilih file PDF terlebih dahulu!');
+      return;
+    }
+
+    setIsExtractingExcel(true);
+    setLoading(true);
+    setStatusMsg('Mengekstrak data teks & tabel dari PDF...');
+
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      const pdfJsDoc = await pdfjsLib.getDocument({ data: arrayBuffer, password: pdfPassword }).promise;
+      const count = pdfJsDoc.numPages;
+
+      const extractedRows: string[][] = [];
+      extractedRows.push(['Halaman', 'Kolom 1 / Konten Teks', 'Position Y', 'Position X']);
+
+      for (let i = 1; i <= count; i++) {
+        const page = await pdfJsDoc.getPage(i);
+        const textContent = await page.getTextContent();
+        
+        // Group items by vertical position Y
+        const items = textContent.items as any[];
+        const lineMap: { [y: number]: any[] } = {};
+
+        for (const item of items) {
+          if (!item.str || !item.str.trim()) continue;
+          const y = Math.round(item.transform[5] / 10) * 10; // 10px row tolerance grouping
+          if (!lineMap[y]) lineMap[y] = [];
+          lineMap[y].push(item);
+        }
+
+        // Sort rows top-to-bottom (highest Y to lowest Y)
+        const sortedYs = Object.keys(lineMap).map(Number).sort((a, b) => b - a);
+
+        for (const y of sortedYs) {
+          const rowItems = lineMap[y];
+          // Sort items left-to-right (lowest X to highest X)
+          rowItems.sort((a, b) => a.transform[4] - b.transform[4]);
+          
+          const rowValues = rowItems.map(it => it.str.trim());
+          extractedRows.push([`Halaman ${i}`, ...rowValues]);
+        }
+      }
+
+      setExcelData(extractedRows);
+      setStatusMsg('');
+    } catch (err: any) {
+      alert('Gagal mengekstrak PDF ke Excel: ' + err.message);
+    } finally {
+      setIsExtractingExcel(false);
+      setLoading(false);
+    }
+  };
+
+  const handleExportExcelFile = () => {
+    if (excelData.length === 0) {
+      alert('Belum ada data tabel yang diekstrak!');
+      return;
+    }
+    const ws = XLSX.utils.aoa_to_sheet(excelData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'BagiPDF Export');
+    const baseName = file ? file.name.replace(/\.[^/.]+$/, '') : 'PDF_Data';
+    XLSX.writeFile(wb, `${baseName}_exported.xlsx`);
+  };
+
   return (
     <div className="min-h-screen bg-[#1E1E24] text-slate-200 flex flex-col font-sans select-none antialiased">
       {/* macOS Style Header Bar */}
@@ -353,10 +724,51 @@ export default function App() {
           <div className="w-3 h-3 rounded-full bg-[#27C93F] border border-[#1AAB29] hover:opacity-80 transition cursor-pointer"></div>
         </div>
 
-        {/* Title */}
-        <div className="flex items-center gap-2">
-          <Split className="w-4 h-4 text-indigo-400" />
-          <span className="text-xs font-semibold text-slate-300 tracking-wide">BagiPDF</span>
+        {/* Title & Main Suite Selector */}
+        <div className="flex items-center gap-6">
+          <div className="flex items-center gap-2">
+            <Split className="w-4 h-4 text-indigo-400" />
+            <span className="text-xs font-semibold text-slate-300 tracking-wide">BagiPDF</span>
+          </div>
+
+          {/* Navigation Bar (iLovePDF Style Tools) */}
+          <nav className="flex items-center gap-1 bg-slate-900/60 p-1 rounded-lg border border-slate-700/60">
+            <button 
+              onClick={() => setMainTool('split')}
+              className={`flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-md transition ${mainTool === 'split' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}
+            >
+              <Split className="w-3.5 h-3.5" />
+              <span>Split PDF</span>
+            </button>
+            <button 
+              onClick={() => setMainTool('merge')}
+              className={`flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-md transition ${mainTool === 'merge' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}
+            >
+              <Layers className="w-3.5 h-3.5" />
+              <span>Merge PDF</span>
+            </button>
+            <button 
+              onClick={() => setMainTool('watermark')}
+              className={`flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-md transition ${mainTool === 'watermark' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}
+            >
+              <Stamp className="w-3.5 h-3.5" />
+              <span>Watermark</span>
+            </button>
+            <button 
+              onClick={() => setMainTool('edit')}
+              className={`flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-md transition ${mainTool === 'edit' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}
+            >
+              <Edit3 className="w-3.5 h-3.5" />
+              <span>Edit PDF</span>
+            </button>
+            <button 
+              onClick={() => setMainTool('excel')}
+              className={`flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-md transition ${mainTool === 'excel' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5" />
+              <span>PDF to Excel</span>
+            </button>
+          </nav>
         </div>
 
         {/* Right Menu: About Button */}
@@ -371,426 +783,580 @@ export default function App() {
         </div>
       </header>
 
-      {/* Main Container */}
+      {/* Main Workspace Container */}
       <main className="flex-1 flex p-5 gap-5 overflow-hidden">
-        {/* macOS Left Sidebar Panel */}
-        <aside className="w-[340px] bg-[#2B2B36]/90 border border-slate-700/40 rounded-xl p-4 flex flex-col gap-4 shadow-xl backdrop-blur-xl flex-shrink-0 overflow-y-auto">
-          
-          {/* File Upload Box */}
-          <div 
-            onClick={() => fileInputRef.current?.click()}
-            className={`border border-dashed rounded-xl p-4 transition-all cursor-pointer text-center flex flex-col items-center justify-center gap-2.5 ${
-              file 
-                ? 'border-indigo-500/50 bg-indigo-500/10 hover:bg-indigo-500/15' 
-                : 'border-slate-600/60 bg-slate-800/40 hover:bg-slate-800/70 hover:border-slate-500'
-            }`}
-          >
-            <div className={`w-10 h-10 rounded-full flex items-center justify-center transition shadow-inner ${
-              file ? 'bg-indigo-500 text-white' : 'bg-slate-700/70 text-slate-300'
-            }`}>
-              <UploadCloud className="w-5 h-5" />
-            </div>
 
-            {file ? (
-              <div className="w-full">
-                <p className="font-medium text-xs text-indigo-200 truncate max-w-[260px] mx-auto">{file.name}</p>
-                <p className="text-[11px] text-slate-400 mt-0.5">{totalPages} Halaman • {(file.size / (1024*1024)).toFixed(2)} MB</p>
-                {isEncrypted && (
-                  <span className="inline-flex items-center gap-1 mt-1.5 text-[10px] bg-amber-500/20 text-amber-300 px-2 py-0.5 rounded border border-amber-500/30">
-                    <Lock className="w-3 h-3" /> PDF Dilindungi Kata Sandi
-                  </span>
-                )}
-                <span className="block mt-2 text-[10px] bg-indigo-600/30 text-indigo-300 px-2 py-0.5 rounded border border-indigo-500/30">Klik untuk mengganti PDF</span>
-              </div>
-            ) : (
-              <div>
-                <p className="font-semibold text-xs text-slate-200">Pilih File PDF</p>
-                <p className="text-[11px] text-slate-400 mt-0.5">Klik untuk memilih dokumen PDF</p>
-              </div>
-            )}
-          </div>
-
-          <input 
-            ref={fileInputRef} 
-            type="file" 
-            accept="application/pdf" 
-            onChange={handleFileChange} 
-            className="hidden" 
-          />
-
-          {/* Password Section */}
-          <div className="bg-slate-900/60 border border-slate-700/50 rounded-xl p-3.5 flex flex-col gap-2.5">
-            <div className="flex items-center justify-between text-xs font-semibold text-slate-300">
-              <span className="flex items-center gap-1.5">
-                <Lock className="w-3.5 h-3.5 text-indigo-400" />
-                <span>Kata Sandi PDF</span>
-              </span>
-              {isEncrypted && (
-                <span className="text-[10px] bg-amber-500/20 text-amber-300 px-1.5 py-0.5 rounded font-normal">
-                  File Terkunci
-                </span>
-              )}
-            </div>
-
-            <div>
-              <p className="text-[11px] text-slate-400 mb-1.5">
-                Masukkan password untuk membuka PDF terenkripsi:
-              </p>
-              <div className="relative flex items-center">
-                <input 
-                  type={showPdfPassword ? "text" : "password"} 
-                  value={pdfPassword}
-                  onChange={(e) => setPdfPassword(e.target.value)}
-                  placeholder="Masukkan password PDF..."
-                  className="w-full bg-slate-950/80 border border-slate-700/80 rounded-lg pl-3 pr-8 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
-                />
-                <button 
-                  type="button"
-                  onClick={() => setShowPdfPassword(!showPdfPassword)}
-                  className="absolute right-2 text-slate-400 hover:text-slate-200"
-                >
-                  {showPdfPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                </button>
-              </div>
-              {file && (
-                <button 
-                  onClick={() => loadPdf(file, pdfPassword)}
-                  className="mt-2 w-full text-[11px] bg-slate-800 hover:bg-slate-700 text-indigo-300 py-1 rounded border border-slate-700 transition font-medium"
-                >
-                  Terapkan / Buka Ulang PDF
-                </button>
-              )}
-            </div>
-          </div>
-
-          {/* Mode Selector Tabs */}
-          <div className="flex flex-col flex-1 gap-3.5">
-            <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Mode Pemotongan</label>
-
-            <div className="grid grid-cols-2 gap-1.5 bg-slate-900/60 p-1 rounded-lg border border-slate-700/50">
-              <button 
-                onClick={() => setActiveTab('custom')}
-                className={`py-1.5 px-2.5 text-xs font-medium rounded-md transition ${activeTab === 'custom' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}
+        {/* --- 1. SPLIT PDF SUITE --- */}
+        {mainTool === 'split' && (
+          <>
+            <aside className="w-[340px] bg-[#2B2B36]/90 border border-slate-700/40 rounded-xl p-4 flex flex-col gap-4 shadow-xl backdrop-blur-xl flex-shrink-0 overflow-y-auto">
+              <div 
+                onClick={() => fileInputRef.current?.click()}
+                className={`border border-dashed rounded-xl p-4 transition-all cursor-pointer text-center flex flex-col items-center justify-center gap-2.5 ${
+                  file ? 'border-indigo-500/50 bg-indigo-500/10 hover:bg-indigo-500/15' : 'border-slate-600/60 bg-slate-800/40 hover:bg-slate-800/70 hover:border-slate-500'
+                }`}
               >
-                Custom Range
-              </button>
-              <button 
-                onClick={() => setActiveTab('fixed')}
-                className={`py-1.5 px-2.5 text-xs font-medium rounded-md transition ${activeTab === 'fixed' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}
-              >
-                Fixed Range
-              </button>
-              <button 
-                onClick={() => setActiveTab('extract')}
-                className={`py-1.5 px-2.5 text-xs font-medium rounded-md transition ${activeTab === 'extract' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}
-              >
-                Extract Pages
-              </button>
-              <button 
-                onClick={() => setActiveTab('size')}
-                className={`py-1.5 px-2.5 text-xs font-medium rounded-md transition ${activeTab === 'size' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}
-              >
-                Split by Size
-              </button>
-            </div>
-
-            {/* Tab Configurations */}
-            <div className="bg-slate-900/40 border border-slate-700/40 rounded-xl p-3.5 flex-1 flex flex-col justify-between">
-              {activeTab === 'custom' && (
-                <div className="space-y-3">
-                  <div>
-                    <label className="text-xs font-medium text-slate-300 block mb-1">Rentang Halaman Custom</label>
-                    <p className="text-[11px] text-slate-400 mb-2">Gunakan koma & strip (misal: <code className="text-indigo-300">1-3, 5, 8-10</code>)</p>
-                    <input 
-                      type="text" 
-                      value={customRanges} 
-                      onChange={(e) => setCustomRanges(e.target.value)}
-                      className="w-full bg-slate-950/80 border border-slate-700/80 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-indigo-500"
-                    />
+                <div className={`w-10 h-10 rounded-full flex items-center justify-center transition shadow-inner ${file ? 'bg-indigo-500 text-white' : 'bg-slate-700/70 text-slate-300'}`}>
+                  <UploadCloud className="w-5 h-5" />
+                </div>
+                {file ? (
+                  <div className="w-full">
+                    <p className="font-medium text-xs text-indigo-200 truncate max-w-[260px] mx-auto">{file.name}</p>
+                    <p className="text-[11px] text-slate-400 mt-0.5">{totalPages} Halaman • {(file.size / (1024*1024)).toFixed(2)} MB</p>
                   </div>
-                  <label className="flex items-center gap-2 cursor-pointer pt-1">
-                    <input 
-                      type="checkbox" 
-                      checked={mergeCustom} 
-                      onChange={(e) => setMergeCustom(e.target.checked)}
-                      className="rounded border-slate-700 text-indigo-600 focus:ring-indigo-500 bg-slate-900"
-                    />
-                    <span className="text-xs text-slate-300">Gabungkan hasil rentang ke 1 file</span>
-                  </label>
+                ) : (
+                  <div>
+                    <p className="font-semibold text-xs text-slate-200">Pilih File PDF</p>
+                    <p className="text-[11px] text-slate-400 mt-0.5">Klik untuk memilih dokumen PDF</p>
+                  </div>
+                )}
+              </div>
+              <input ref={fileInputRef} type="file" accept="application/pdf" onChange={handleFileChange} className="hidden" />
+
+              {/* Password Box */}
+              <div className="bg-slate-900/60 border border-slate-700/50 rounded-xl p-3.5 flex flex-col gap-2.5">
+                <div className="flex items-center justify-between text-xs font-semibold text-slate-300">
+                  <span className="flex items-center gap-1.5"><Lock className="w-3.5 h-3.5 text-indigo-400" /> Kata Sandi PDF</span>
+                </div>
+                <div className="relative flex items-center">
+                  <input 
+                    type={showPdfPassword ? "text" : "password"} 
+                    value={pdfPassword}
+                    onChange={(e) => setPdfPassword(e.target.value)}
+                    placeholder="Masukkan password PDF..."
+                    className="w-full bg-slate-950/80 border border-slate-700/80 rounded-lg pl-3 pr-8 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+                  />
+                  <button type="button" onClick={() => setShowPdfPassword(!showPdfPassword)} className="absolute right-2 text-slate-400 hover:text-slate-200">
+                    {showPdfPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                  </button>
+                </div>
+              </div>
+
+              {/* Mode Tabs */}
+              <div className="flex flex-col flex-1 gap-3.5">
+                <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Mode Pemotongan</label>
+                <div className="grid grid-cols-2 gap-1.5 bg-slate-900/60 p-1 rounded-lg border border-slate-700/50">
+                  <button onClick={() => setActiveSplitTab('custom')} className={`py-1.5 px-2.5 text-xs font-medium rounded-md transition ${activeSplitTab === 'custom' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}>Custom Range</button>
+                  <button onClick={() => setActiveSplitTab('fixed')} className={`py-1.5 px-2.5 text-xs font-medium rounded-md transition ${activeSplitTab === 'fixed' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}>Fixed Range</button>
+                  <button onClick={() => setActiveSplitTab('extract')} className={`py-1.5 px-2.5 text-xs font-medium rounded-md transition ${activeSplitTab === 'extract' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}>Extract Pages</button>
+                  <button onClick={() => setActiveSplitTab('size')} className={`py-1.5 px-2.5 text-xs font-medium rounded-md transition ${activeSplitTab === 'size' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}>Split by Size</button>
+                </div>
+
+                <div className="bg-slate-900/40 border border-slate-700/40 rounded-xl p-3.5 flex-1 flex flex-col justify-between">
+                  {activeSplitTab === 'custom' && (
+                    <div className="space-y-3">
+                      <div>
+                        <label className="text-xs font-medium text-slate-300 block mb-1">Rentang Halaman Custom</label>
+                        <input type="text" value={customRanges} onChange={(e) => setCustomRanges(e.target.value)} className="w-full bg-slate-950/80 border border-slate-700/80 rounded-lg px-3 py-1.5 text-xs text-white" />
+                      </div>
+                      <label className="flex items-center gap-2 cursor-pointer pt-1">
+                        <input type="checkbox" checked={mergeCustom} onChange={(e) => setMergeCustom(e.target.checked)} className="rounded border-slate-700 text-indigo-600 bg-slate-900" />
+                        <span className="text-xs text-slate-300">Gabungkan hasil rentang ke 1 file</span>
+                      </label>
+                    </div>
+                  )}
+
+                  {activeSplitTab === 'fixed' && (
+                    <div className="space-y-3">
+                      <div>
+                        <label className="text-xs font-medium text-slate-300 block mb-1">Split Setiap N Halaman</label>
+                        <div className="flex items-center gap-2.5">
+                          <span className="text-xs text-slate-400">Setiap</span>
+                          <input type="number" min="1" value={fixedStep} onChange={(e) => setFixedStep(parseInt(e.target.value) || 1)} className="w-20 bg-slate-950/80 border border-slate-700/80 rounded-lg px-3 py-1.5 text-xs text-white text-center" />
+                          <span className="text-xs text-slate-400">halaman</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {activeSplitTab === 'extract' && (
+                    <div className="space-y-3">
+                      <label className="text-xs font-medium text-slate-300 block">Opsi Ekstraksi</label>
+                      <label className="flex items-center gap-2 cursor-pointer"><input type="radio" name="extMode" checked={extractMode === 'all'} onChange={() => setExtractMode('all')} /><span className="text-xs text-slate-300">Ekstrak SEMUA halaman</span></label>
+                      <label className="flex items-center gap-2 cursor-pointer"><input type="radio" name="extMode" checked={extractMode === 'select'} onChange={() => setExtractMode('select')} /><span className="text-xs text-slate-300">Ekstrak Halaman Tertentu</span></label>
+                      {extractMode === 'select' && (
+                        <input type="text" value={extractPagesStr} onChange={(e) => setExtractPagesStr(e.target.value)} placeholder="Contoh: 1, 3, 5-7" className="w-full bg-slate-950/80 border border-slate-700/80 rounded-lg px-3 py-1.5 text-xs text-white" />
+                      )}
+                    </div>
+                  )}
+
+                  {activeSplitTab === 'size' && (
+                    <div className="space-y-3">
+                      <label className="text-xs font-medium text-slate-300 block mb-1">Batas Maksimal Ukuran (MB)</label>
+                      <input type="number" step="0.5" min="0.5" value={targetMB} onChange={(e) => setTargetMB(parseFloat(e.target.value) || 1)} className="w-24 bg-slate-950/80 border border-slate-700/80 rounded-lg px-3 py-1.5 text-xs text-white text-center" />
+                    </div>
+                  )}
+
+                  <button 
+                    disabled={!file || loading}
+                    onClick={handleExecuteSplit}
+                    className="w-full mt-3 bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 disabled:opacity-40 text-white font-semibold py-2.5 rounded-lg shadow-md transition flex items-center justify-center gap-2 text-xs"
+                  >
+                    {loading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-4 h-4" />}
+                    <span>Proses & Simpan Split PDF</span>
+                  </button>
+                </div>
+              </div>
+            </aside>
+
+            {/* Visual Preview */}
+            <section className="flex-1 bg-[#2B2B36]/90 border border-slate-700/40 rounded-xl flex flex-col overflow-hidden shadow-xl backdrop-blur-xl">
+              <div className="bg-slate-900/60 px-5 py-2.5 border-b border-slate-700/50 flex items-center justify-between">
+                <h2 className="text-xs font-semibold text-slate-300 flex items-center gap-2"><Grid className="w-3.5 h-3.5 text-indigo-400" /> Pratinjau Visual Halaman</h2>
+                {totalPages > 0 && <span className="text-[11px] text-slate-400 bg-slate-800/80 px-2.5 py-0.5 rounded-md border border-slate-700/60">{totalPages} Halaman</span>}
+              </div>
+              <div className="flex-1 p-5 overflow-y-auto bg-[#181820]">
+                {thumbnails.length > 0 && (
+                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3.5">
+                    {thumbnails.map(thumb => (
+                      <div key={thumb.pageIndex} className="bg-[#23232D] border border-slate-700/50 rounded-lg p-2.5 flex flex-col items-center gap-2">
+                        <img src={thumb.dataUrl} alt={`Halaman ${thumb.pageIndex + 1}`} className="object-contain w-full h-full rounded border border-slate-800" />
+                        <span className="text-[10px] text-slate-300">Halaman {thumb.pageIndex + 1}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </section>
+          </>
+        )}
+
+        {/* --- 2. MERGE PDF SUITE --- */}
+        {mainTool === 'merge' && (
+          <div className="flex-1 flex gap-5">
+            <aside className="w-[360px] bg-[#2B2B36]/90 border border-slate-700/40 rounded-xl p-4 flex flex-col gap-4 shadow-xl backdrop-blur-xl flex-shrink-0">
+              <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-2">
+                <Layers className="w-4 h-4 text-indigo-400" /> Penggabungan Multiple PDF
+              </h3>
+
+              <div 
+                onClick={() => mergeFileInputRef.current?.click()}
+                className="border border-dashed border-indigo-500/50 bg-indigo-500/10 hover:bg-indigo-500/20 rounded-xl p-5 cursor-pointer text-center flex flex-col items-center justify-center gap-2 transition"
+              >
+                <Plus className="w-6 h-6 text-indigo-400" />
+                <p className="text-xs font-semibold text-indigo-200">Tambah File PDF</p>
+                <p className="text-[11px] text-slate-400">Pilih 2 atau lebih file PDF untuk digabungkan</p>
+              </div>
+              <input ref={mergeFileInputRef} type="file" accept="application/pdf" multiple onChange={handleMergeFilesAdd} className="hidden" />
+
+              <div className="flex-1 flex flex-col justify-between">
+                <p className="text-[11px] text-slate-400">Urutan penggabungan file akan disesuaikan dari atas ke bawah pada daftar sebelah kanan.</p>
+                <button 
+                  disabled={mergeFiles.length < 2 || loading}
+                  onClick={handleExecuteMerge}
+                  className="w-full bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 disabled:opacity-40 text-white font-semibold py-2.5 rounded-lg shadow-md transition flex items-center justify-center gap-2 text-xs mt-4"
+                >
+                  {loading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Layers className="w-4 h-4" />}
+                  <span>Gabungkan ({mergeFiles.length}) File PDF</span>
+                </button>
+              </div>
+            </aside>
+
+            {/* List of Files to Merge */}
+            <section className="flex-1 bg-[#2B2B36]/90 border border-slate-700/40 rounded-xl p-5 flex flex-col gap-3 overflow-hidden shadow-xl backdrop-blur-xl">
+              <h4 className="text-xs font-semibold text-slate-300">Daftar File PDF yang Akan Digabungkan:</h4>
+              {mergeFiles.length === 0 ? (
+                <div className="flex-1 flex flex-col items-center justify-center text-slate-500">
+                  <Layers className="w-12 h-12 text-slate-600 mb-2" />
+                  <p className="text-xs font-medium text-slate-300">Belum Ada File Ditambahkan</p>
+                  <p className="text-[11px] text-slate-500 mt-1">Klik tombol "+ Tambah File PDF" di sebelah kiri.</p>
+                </div>
+              ) : (
+                <div className="flex-1 overflow-y-auto space-y-2.5 pr-1">
+                  {mergeFiles.map((item, idx) => (
+                    <div key={item.id} className="bg-slate-900/80 border border-slate-700/60 rounded-xl p-3 flex items-center justify-between gap-3 shadow-xs hover:border-indigo-500/50 transition">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <span className="w-6 h-6 rounded-full bg-indigo-600/30 text-indigo-300 font-bold text-xs flex items-center justify-center border border-indigo-500/30">
+                          {idx + 1}
+                        </span>
+                        <div className="min-w-0">
+                          <p className="text-xs font-medium text-slate-200 truncate">{item.file.name}</p>
+                          <p className="text-[11px] text-slate-400">{item.totalPages} Halaman • {item.sizeMB} MB</p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-1.5">
+                        <button disabled={idx === 0} onClick={() => moveMergeFile(idx, 'up')} className="p-1 rounded bg-slate-800 hover:bg-slate-700 disabled:opacity-30 text-slate-300">
+                          <ArrowUp className="w-3.5 h-3.5" />
+                        </button>
+                        <button disabled={idx === mergeFiles.length - 1} onClick={() => moveMergeFile(idx, 'down')} className="p-1 rounded bg-slate-800 hover:bg-slate-700 disabled:opacity-30 text-slate-300">
+                          <ArrowDown className="w-3.5 h-3.5" />
+                        </button>
+                        <button onClick={() => removeMergeFile(idx)} className="p-1 rounded bg-red-500/20 hover:bg-red-500/30 text-red-400">
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               )}
+            </section>
+          </div>
+        )}
 
-              {activeTab === 'fixed' && (
-                <div className="space-y-3">
+        {/* --- 3. WATERMARK PDF SUITE --- */}
+        {mainTool === 'watermark' && (
+          <div className="flex-1 flex gap-5">
+            <aside className="w-[360px] bg-[#2B2B36]/90 border border-slate-700/40 rounded-xl p-4 flex flex-col gap-4 shadow-xl backdrop-blur-xl flex-shrink-0 overflow-y-auto">
+              <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-2">
+                <Stamp className="w-4 h-4 text-indigo-400" /> Pengaturan Watermark
+              </h3>
+
+              {/* Upload Input File */}
+              <div 
+                onClick={() => fileInputRef.current?.click()}
+                className="border border-dashed border-slate-600 rounded-xl p-3 text-center cursor-pointer bg-slate-800/40 hover:bg-slate-800/70"
+              >
+                <p className="text-xs text-indigo-300 font-medium truncate">{file ? file.name : 'Pilih File PDF Target'}</p>
+              </div>
+              <input ref={fileInputRef} type="file" accept="application/pdf" onChange={handleFileChange} className="hidden" />
+
+              {/* Watermark Type */}
+              <div className="flex gap-2 bg-slate-900/60 p-1 rounded-lg border border-slate-700/50">
+                <button onClick={() => setWatermarkType('text')} className={`flex-1 py-1 text-xs font-medium rounded-md ${watermarkType === 'text' ? 'bg-indigo-600 text-white' : 'text-slate-400'}`}>
+                  Teks Watermark
+                </button>
+                <button onClick={() => setWatermarkType('image')} className={`flex-1 py-1 text-xs font-medium rounded-md ${watermarkType === 'image' ? 'bg-indigo-600 text-white' : 'text-slate-400'}`}>
+                  Gambar Watermark
+                </button>
+              </div>
+
+              {watermarkType === 'text' ? (
+                <div className="space-y-3 bg-slate-900/40 p-3 rounded-xl border border-slate-700/40 text-xs">
                   <div>
-                    <label className="text-xs font-medium text-slate-300 block mb-1">Split Setiap N Halaman</label>
-                    <p className="text-[11px] text-slate-400 mb-2">Memotong PDF secara periodik tiap interval halaman</p>
-                    <div className="flex items-center gap-2.5">
-                      <span className="text-xs text-slate-400">Setiap</span>
-                      <input 
-                        type="number" 
-                        min="1"
-                        value={fixedStep} 
-                        onChange={(e) => setFixedStep(parseInt(e.target.value) || 1)}
-                        className="w-20 bg-slate-950/80 border border-slate-700/80 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-indigo-500 text-center"
-                      />
-                      <span className="text-xs text-slate-400">halaman</span>
+                    <label className="block text-slate-300 font-medium mb-1">Teks Watermark</label>
+                    <input type="text" value={watermarkText} onChange={(e) => setWatermarkText(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-white" />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-slate-400 mb-1">Ukuran Font</label>
+                      <input type="number" min="10" max="150" value={watermarkFontSize} onChange={(e) => setWatermarkFontSize(parseInt(e.target.value) || 24)} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-white text-center" />
+                    </div>
+                    <div>
+                      <label className="block text-slate-400 mb-1">Warna Teks</label>
+                      <input type="color" value={watermarkColor} onChange={(e) => setWatermarkColor(e.target.value)} className="w-full h-7 bg-slate-950 border border-slate-700 rounded-lg cursor-pointer" />
                     </div>
                   </div>
-                </div>
-              )}
 
-              {activeTab === 'extract' && (
-                <div className="space-y-3">
-                  <label className="text-xs font-medium text-slate-300 block">Opsi Ekstraksi Halaman</label>
-                  <div className="space-y-1.5">
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input 
-                        type="radio" 
-                        name="extMode" 
-                        checked={extractMode === 'all'} 
-                        onChange={() => setExtractMode('all')}
-                        className="text-indigo-600 focus:ring-indigo-500 bg-slate-900"
-                      />
-                      <span className="text-xs text-slate-300">Ekstrak SEMUA halaman terpisah</span>
-                    </label>
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input 
-                        type="radio" 
-                        name="extMode" 
-                        checked={extractMode === 'select'} 
-                        onChange={() => setExtractMode('select')}
-                        className="text-indigo-600 focus:ring-indigo-500 bg-slate-900"
-                      />
-                      <span className="text-xs text-slate-300">Ekstrak Halaman Tertentu</span>
-                    </label>
+                  <div>
+                    <label className="block text-slate-400 mb-1">Sudut Rotasi ({watermarkRotation}°)</label>
+                    <input type="range" min="-90" max="90" value={watermarkRotation} onChange={(e) => setWatermarkRotation(parseInt(e.target.value))} className="w-full accent-indigo-500" />
                   </div>
 
-                  {extractMode === 'select' && (
-                    <div className="pt-1.5 space-y-2.5">
-                      <input 
-                        type="text" 
-                        value={extractPagesStr} 
-                        onChange={(e) => setExtractPagesStr(e.target.value)}
-                        placeholder="Contoh: 1, 3, 5-7"
-                        className="w-full bg-slate-950/80 border border-slate-700/80 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-indigo-500"
-                      />
-                      <label className="flex items-center gap-2 cursor-pointer">
-                        <input 
-                          type="checkbox" 
-                          checked={mergeExtract} 
-                          onChange={(e) => setMergeExtract(e.target.checked)}
-                          className="rounded border-slate-700 text-indigo-600 focus:ring-indigo-500 bg-slate-900"
-                        />
-                        <span className="text-xs text-slate-300">Gabungkan halaman terpilih</span>
-                      </label>
+                  <div>
+                    <label className="block text-slate-400 mb-1">Transparansi / Opacity ({Math.round(watermarkOpacity * 100)}%)</label>
+                    <input type="range" min="0.1" max="1" step="0.05" value={watermarkOpacity} onChange={(e) => setWatermarkOpacity(parseFloat(e.target.value))} className="w-full accent-indigo-500" />
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-3 bg-slate-900/40 p-3 rounded-xl border border-slate-700/40 text-xs">
+                  <div>
+                    <label className="block text-slate-300 font-medium mb-1">Pilih Gambar Logo/Cap</label>
+                    <button onClick={() => watermarkImgInputRef.current?.click()} className="w-full bg-slate-800 border border-slate-700 hover:bg-slate-700 text-indigo-300 py-1.5 rounded-lg">
+                      Upload Logo (.png, .jpg)
+                    </button>
+                    <input ref={watermarkImgInputRef} type="file" accept="image/*" onChange={handleWatermarkImageChange} className="hidden" />
+                  </div>
+                  {watermarkImagePreview && (
+                    <div className="w-full h-24 bg-slate-950 rounded-lg p-2 border border-slate-800 flex items-center justify-center">
+                      <img src={watermarkImagePreview} alt="Preview Logo" className="max-h-full object-contain" />
                     </div>
                   )}
                 </div>
               )}
 
-              {activeTab === 'size' && (
-                <div className="space-y-3">
-                  <div>
-                    <label className="text-xs font-medium text-slate-300 block mb-1">Batas Maksimal Ukuran File (MB)</label>
-                    <p className="text-[11px] text-slate-400 mb-2">Membagi PDF agar tiap bagian tak melebihi target</p>
-                    <div className="flex items-center gap-2.5">
-                      <input 
-                        type="number" 
-                        step="0.5"
-                        min="0.5"
-                        value={targetMB} 
-                        onChange={(e) => setTargetMB(parseFloat(e.target.value) || 1)}
-                        className="w-24 bg-slate-950/80 border border-slate-700/80 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-indigo-500 text-center"
-                      />
-                      <span className="text-xs text-slate-400">MB per file</span>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Submit Action Button */}
               <button 
                 disabled={!file || loading}
-                onClick={handleExecuteSplit}
-                className="w-full mt-3 bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold py-2.5 rounded-lg shadow-md transition flex items-center justify-center gap-2 text-xs"
+                onClick={handleExecuteWatermark}
+                className="w-full bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 disabled:opacity-40 text-white font-semibold py-2.5 rounded-lg shadow-md transition flex items-center justify-center gap-2 text-xs"
               >
-                {loading ? (
-                  <>
-                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                    <span>{statusMsg || 'Memproses...'}</span>
-                  </>
-                ) : (
-                  <>
-                    <Download className="w-4 h-4" />
-                    <span>Proses & Simpan Split PDF</span>
-                  </>
-                )}
+                {loading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Stamp className="w-4 h-4" />}
+                <span>Terapkan & Simpan Watermark</span>
               </button>
-            </div>
-          </div>
-        </aside>
+            </aside>
 
-        {/* macOS Main Visual Preview Window */}
-        <section className="flex-1 bg-[#2B2B36]/90 border border-slate-700/40 rounded-xl flex flex-col overflow-hidden shadow-xl backdrop-blur-xl">
-          <div className="bg-slate-900/60 px-5 py-2.5 border-b border-slate-700/50 flex items-center justify-between">
-            <h2 className="text-xs font-semibold text-slate-300 flex items-center gap-2">
-              <Grid className="w-3.5 h-3.5 text-indigo-400" /> Pratinjau Visual Halaman
-            </h2>
-            {totalPages > 0 && (
-              <span className="text-[11px] text-slate-400 bg-slate-800/80 px-2.5 py-0.5 rounded-md border border-slate-700/60">
-                {totalPages} Halaman
-              </span>
-            )}
-          </div>
-
-          <div className="flex-1 p-5 overflow-y-auto bg-[#181820]">
-            {!file ? (
-              <div className="h-full flex flex-col items-center justify-center text-center text-slate-500">
-                <Sparkles className="w-10 h-10 text-slate-600 mb-2.5" />
-                <p className="font-medium text-xs text-slate-300">Belum Ada Dokumen Terpilih</p>
-                <p className="text-[11px] text-slate-500 max-w-xs mt-1">Silakan upload dokumen PDF untuk melihat tampilan halaman visual di sini.</p>
-              </div>
-            ) : thumbnails.length === 0 ? (
-              <div className="h-full flex flex-col items-center justify-center text-center text-slate-400">
-                <RefreshCw className="w-7 h-7 animate-spin text-indigo-400 mb-2.5" />
-                <p className="text-xs">{statusMsg || 'Memuat pratinjau...'}</p>
-              </div>
-            ) : (
-              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3.5">
-                {thumbnails.map((thumb) => (
-                  <div 
-                    key={thumb.pageIndex}
-                    className="bg-[#23232D] border border-slate-700/50 rounded-lg p-2.5 flex flex-col items-center gap-2 hover:border-indigo-500/60 transition group shadow-sm"
-                  >
-                    <div className="w-full aspect-[3/4] bg-slate-950 rounded border border-slate-800 overflow-hidden flex items-center justify-center group-hover:shadow-md transition">
+            {/* Visual Canvas Preview */}
+            <section className="flex-1 bg-[#2B2B36]/90 border border-slate-700/40 rounded-xl p-5 flex flex-col items-center justify-center shadow-xl backdrop-blur-xl relative overflow-hidden">
+              <h4 className="absolute top-4 left-5 text-xs font-semibold text-slate-300">Visual Pratinjau Watermark:</h4>
+              {thumbnails.length > 0 ? (
+                <div className="relative border border-slate-700 rounded-lg overflow-hidden max-w-sm shadow-2xl bg-white">
+                  <img src={thumbnails[0].dataUrl} alt="Visual Page" className="w-full object-contain" />
+                  {/* Overlay Simulated Watermark */}
+                  <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                    {watermarkType === 'text' ? (
+                      <span 
+                        style={{
+                          fontSize: `${watermarkFontSize * 0.4}px`,
+                          color: watermarkColor,
+                          opacity: watermarkOpacity,
+                          transform: `rotate(${watermarkRotation}deg)`,
+                          fontWeight: 'bold',
+                        }}
+                      >
+                        {watermarkText}
+                      </span>
+                    ) : watermarkImagePreview ? (
                       <img 
-                        src={thumb.dataUrl} 
-                        alt={`Halaman ${thumb.pageIndex + 1}`} 
-                        className="object-contain w-full h-full"
+                        src={watermarkImagePreview} 
+                        alt="Watermark Overlay" 
+                        style={{
+                          width: '120px',
+                          opacity: watermarkOpacity,
+                          transform: `rotate(${watermarkRotation}deg)`
+                        }} 
                       />
+                    ) : null}
+                  </div>
+                </div>
+              ) : (
+                <div className="text-center text-slate-500">
+                  <Stamp className="w-10 h-10 mb-2 mx-auto" />
+                  <p className="text-xs text-slate-400">Pilih dokumen PDF untuk melihat simulasi watermark.</p>
+                </div>
+              )}
+            </section>
+          </div>
+        )}
+
+        {/* --- 4. EDIT PDF SUITE --- */}
+        {mainTool === 'edit' && (
+          <div className="flex-1 flex gap-5">
+            <aside className="w-[360px] bg-[#2B2B36]/90 border border-slate-700/40 rounded-xl p-4 flex flex-col gap-4 shadow-xl backdrop-blur-xl flex-shrink-0 overflow-y-auto">
+              <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-2">
+                <Edit3 className="w-4 h-4 text-indigo-400" /> Tambah Catatan / Teks ke PDF
+              </h3>
+
+              <div 
+                onClick={() => fileInputRef.current?.click()}
+                className="border border-dashed border-slate-600 rounded-xl p-3 text-center cursor-pointer bg-slate-800/40 hover:bg-slate-800/70"
+              >
+                <p className="text-xs text-indigo-300 font-medium truncate">{file ? file.name : 'Pilih File PDF Target'}</p>
+              </div>
+              <input ref={fileInputRef} type="file" accept="application/pdf" onChange={handleFileChange} className="hidden" />
+
+              {/* Annotation Input Options */}
+              <div className="space-y-3 bg-slate-900/40 p-3 rounded-xl border border-slate-700/40 text-xs">
+                <div>
+                  <label className="block text-slate-300 font-medium mb-1">Target Halaman</label>
+                  <select 
+                    value={selectedPageIndex} 
+                    onChange={(e) => setSelectedPageIndex(parseInt(e.target.value))}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-white"
+                  >
+                    {Array.from({ length: totalPages }, (_, i) => (
+                      <option key={i} value={i}>Halaman {i + 1}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-slate-300 font-medium mb-1">Isi Teks / Catatan</label>
+                  <input type="text" value={annotationInput} onChange={(e) => setAnnotationInput(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-white" />
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-slate-400 mb-1">Ukuran Font</label>
+                    <input type="number" min="10" max="72" value={annotationFontSize} onChange={(e) => setAnnotationFontSize(parseInt(e.target.value) || 16)} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-white text-center" />
+                  </div>
+                  <div>
+                    <label className="block text-slate-400 mb-1">Warna</label>
+                    <input type="color" value={annotationColor} onChange={(e) => setAnnotationColor(e.target.value)} className="w-full h-7 bg-slate-950 border border-slate-700 rounded-lg cursor-pointer" />
+                  </div>
+                </div>
+
+                <button 
+                  onClick={handleAddAnnotation}
+                  className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-medium py-1.5 rounded-lg flex items-center justify-center gap-1.5"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Tambahkan Teks ke Halaman</span>
+                </button>
+              </div>
+
+              {/* List of Annotations */}
+              <div className="flex-1 bg-slate-900/60 p-3 rounded-xl border border-slate-700/50 flex flex-col gap-2 overflow-y-auto">
+                <span className="text-[11px] font-semibold text-slate-400">Daftar Catatan ({annotations.length})</span>
+                {annotations.map(ann => (
+                  <div key={ann.id} className="bg-slate-950 p-2 rounded border border-slate-800 flex items-center justify-between text-xs">
+                    <div>
+                      <p className="font-medium text-slate-200 truncate max-w-[200px]" style={{ color: ann.color }}>{ann.text}</p>
+                      <p className="text-[10px] text-slate-500">Hal {ann.pageIndex + 1} • {ann.fontSize}px</p>
                     </div>
-                    <span className="text-[10px] font-medium text-slate-300 bg-slate-900/90 px-2 py-0.5 rounded border border-slate-700/50">
-                      Halaman {thumb.pageIndex + 1}
-                    </span>
+                    <button onClick={() => handleRemoveAnnotation(ann.id)} className="text-red-400 hover:text-red-300 p-1">
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
                   </div>
                 ))}
               </div>
-            )}
+
+              <button 
+                disabled={!file || annotations.length === 0 || loading}
+                onClick={handleExecuteEditPdf}
+                className="w-full bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 disabled:opacity-40 text-white font-semibold py-2.5 rounded-lg shadow-md transition flex items-center justify-center gap-2 text-xs"
+              >
+                {loading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                <span>Simpan File Hasil Edit</span>
+              </button>
+            </aside>
+
+            {/* Editor Canvas Area */}
+            <section className="flex-1 bg-[#2B2B36]/90 border border-slate-700/40 rounded-xl p-5 flex flex-col items-center justify-center shadow-xl backdrop-blur-xl relative overflow-hidden">
+              <h4 className="absolute top-4 left-5 text-xs font-semibold text-slate-300">Kanvas Edit Teks Halaman {selectedPageIndex + 1}:</h4>
+              {thumbnails.length > selectedPageIndex ? (
+                <div className="relative border border-slate-700 rounded-lg overflow-hidden max-w-sm shadow-2xl bg-white">
+                  <img src={thumbnails[selectedPageIndex].dataUrl} alt="Visual Edit" className="w-full object-contain" />
+                  {annotations.filter(a => a.pageIndex === selectedPageIndex).map(ann => (
+                    <div 
+                      key={ann.id}
+                      style={{
+                        position: 'absolute',
+                        left: `${ann.xPercent}%`,
+                        top: `${ann.yPercent}%`,
+                        color: ann.color,
+                        fontSize: `${ann.fontSize * 0.5}px`,
+                        fontWeight: 'bold',
+                        transform: 'translate(-50%, -50%)',
+                        background: 'rgba(0,0,0,0.4)',
+                        padding: '2px 6px',
+                        borderRadius: '4px'
+                      }}
+                    >
+                      {ann.text}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center text-slate-500">
+                  <Edit3 className="w-10 h-10 mb-2 mx-auto" />
+                  <p className="text-xs text-slate-400">Pilih dokumen PDF untuk menambahkan teks/catatan.</p>
+                </div>
+              )}
+            </section>
           </div>
-        </section>
+        )}
+
+        {/* --- 5. PDF TO EXCEL SUITE --- */}
+        {mainTool === 'excel' && (
+          <div className="flex-1 flex gap-5">
+            <aside className="w-[340px] bg-[#2B2B36]/90 border border-slate-700/40 rounded-xl p-4 flex flex-col gap-4 shadow-xl backdrop-blur-xl flex-shrink-0">
+              <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-2">
+                <FileSpreadsheet className="w-4 h-4 text-indigo-400" /> PDF ke Spreadsheet Excel
+              </h3>
+
+              <div 
+                onClick={() => fileInputRef.current?.click()}
+                className="border border-dashed border-slate-600 rounded-xl p-4 text-center cursor-pointer bg-slate-800/40 hover:bg-slate-800/70"
+              >
+                <p className="text-xs text-indigo-300 font-medium truncate">{file ? file.name : 'Pilih File PDF Berisi Tabel'}</p>
+                <p className="text-[11px] text-slate-400 mt-1">Ekstrak struktur tabel ke file Excel (.xlsx)</p>
+              </div>
+              <input ref={fileInputRef} type="file" accept="application/pdf" onChange={handleFileChange} className="hidden" />
+
+              <button 
+                disabled={!file || loading}
+                onClick={handleExtractPdfToExcel}
+                className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white font-semibold py-2.5 rounded-lg shadow-md transition flex items-center justify-center gap-2 text-xs"
+              >
+                {isExtractingExcel ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                <span>Ekstrak Data Tabel ke Grid</span>
+              </button>
+
+              {excelData.length > 0 && (
+                <button 
+                  onClick={handleExportExcelFile}
+                  className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2.5 rounded-lg shadow-md transition flex items-center justify-center gap-2 text-xs mt-2"
+                >
+                  <Download className="w-4 h-4" />
+                  <span>Unduh File Excel (.xlsx)</span>
+                </button>
+              )}
+            </aside>
+
+            {/* Table Preview Grid */}
+            <section className="flex-1 bg-[#2B2B36]/90 border border-slate-700/40 rounded-xl p-5 flex flex-col gap-3 overflow-hidden shadow-xl backdrop-blur-xl">
+              <div className="flex items-center justify-between">
+                <h4 className="text-xs font-semibold text-slate-300">Hasil Ekstraksi Grid Excel ({excelData.length} Baris):</h4>
+                {excelData.length > 0 && (
+                  <span className="text-[11px] text-emerald-400 bg-emerald-500/10 px-2.5 py-0.5 rounded border border-emerald-500/30 font-medium">
+                    Siap Diunduh (.xlsx)
+                  </span>
+                )}
+              </div>
+
+              {excelData.length === 0 ? (
+                <div className="flex-1 flex flex-col items-center justify-center text-slate-500">
+                  <FileSpreadsheet className="w-12 h-12 text-slate-600 mb-2" />
+                  <p className="text-xs font-medium text-slate-300">Belum Ada Data Diekstrak</p>
+                  <p className="text-[11px] text-slate-500 mt-1">Pilih PDF lalu klik "Ekstrak Data Tabel ke Grid".</p>
+                </div>
+              ) : (
+                <div className="flex-1 overflow-auto border border-slate-700/60 rounded-xl bg-slate-950">
+                  <table className="w-full text-left text-xs text-slate-300 border-collapse">
+                    <tbody>
+                      {excelData.map((row, rIdx) => (
+                        <tr key={rIdx} className={rIdx === 0 ? "bg-slate-900 font-semibold text-indigo-300 border-b border-slate-800" : "border-b border-slate-900 hover:bg-slate-900/50"}>
+                          {row.map((cell, cIdx) => (
+                            <td key={cIdx} className="p-2 border-r border-slate-900 min-w-[120px] truncate">
+                              {cell}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </section>
+          </div>
+        )}
       </main>
 
       {/* Password Prompt Modal Dialog */}
       {showPasswordModal && (
         <div className="fixed inset-0 bg-black/75 backdrop-blur-md z-50 flex items-center justify-center p-4">
-          <form 
-            onSubmit={handleModalPasswordSubmit}
-            className="bg-[#2B2B36] border border-slate-700/80 rounded-2xl w-full max-w-sm p-6 shadow-2xl relative text-center flex flex-col items-center gap-4"
-          >
-            <div className="w-14 h-14 bg-amber-500/20 text-amber-400 rounded-2xl flex items-center justify-center border border-amber-500/30 shadow-inner">
+          <form onSubmit={handleModalPasswordSubmit} className="bg-[#2B2B36] border border-slate-700/80 rounded-2xl w-full max-w-sm p-6 shadow-2xl relative text-center flex flex-col items-center gap-4">
+            <div className="w-14 h-14 bg-amber-500/20 text-amber-400 rounded-2xl flex items-center justify-center border border-amber-500/30">
               <Key className="w-7 h-7" />
             </div>
-
             <div>
               <h3 className="text-base font-bold text-white">PDF Dilindungi Kata Sandi</h3>
-              <p className="text-xs text-slate-400 mt-1">
-                Dokumen <span className="text-indigo-300 font-medium">{pendingFile?.name}</span> memerlukan kata sandi untuk dibuka.
-              </p>
+              <p className="text-xs text-slate-400 mt-1">Dokumen memerlukan kata sandi untuk dibuka.</p>
             </div>
-
-            {modalError && (
-              <div className="w-full text-xs text-red-400 bg-red-500/10 border border-red-500/20 px-3 py-1.5 rounded-lg">
-                {modalError}
-              </div>
-            )}
-
+            {modalError && <div className="w-full text-xs text-red-400 bg-red-500/10 border border-red-500/20 px-3 py-1.5 rounded-lg">{modalError}</div>}
             <div className="w-full space-y-1 text-left">
               <label className="text-[11px] text-slate-300 font-medium">Kata Sandi PDF</label>
-              <div className="relative flex items-center">
-                <input 
-                  type={showPdfPassword ? "text" : "password"} 
-                  value={modalPasswordInput}
-                  onChange={(e) => setModalPasswordInput(e.target.value)}
-                  placeholder="Masukkan kata sandi..."
-                  autoFocus
-                  className="w-full bg-slate-950/80 border border-slate-700/80 rounded-lg pl-3 pr-8 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
-                />
-                <button 
-                  type="button"
-                  onClick={() => setShowPdfPassword(!showPdfPassword)}
-                  className="absolute right-2.5 text-slate-400 hover:text-slate-200"
-                >
-                  {showPdfPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                </button>
-              </div>
+              <input type="password" value={modalPasswordInput} onChange={(e) => setModalPasswordInput(e.target.value)} placeholder="Masukkan kata sandi..." autoFocus className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white" />
             </div>
-
             <div className="flex gap-2.5 w-full mt-1">
-              <button 
-                type="button"
-                onClick={() => {
-                  setShowPasswordModal(false);
-                  setPendingFile(null);
-                  setFile(null);
-                }}
-                className="flex-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 font-medium py-2 rounded-lg text-xs transition"
-              >
-                Batal
-              </button>
-              <button 
-                type="submit"
-                className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-2 rounded-lg text-xs shadow-md transition flex items-center justify-center gap-1.5"
-              >
-                <Lock className="w-3.5 h-3.5" />
-                <span>Buka PDF</span>
-              </button>
+              <button type="button" onClick={() => setShowPasswordModal(false)} className="flex-1 bg-slate-800 text-slate-300 py-2 rounded-lg text-xs">Batal</button>
+              <button type="submit" className="flex-1 bg-indigo-600 text-white font-semibold py-2 rounded-lg text-xs">Buka PDF</button>
             </div>
           </form>
         </div>
       )}
 
-      {/* About Modal Dialog (macOS Style) */}
+      {/* About Modal Dialog */}
       {showAbout && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-[#2B2B36] border border-slate-700/80 rounded-2xl w-full max-w-md p-6 shadow-2xl relative text-center flex flex-col items-center gap-4">
-            <button 
-              onClick={() => setShowAbout(false)}
-              className="absolute top-4 right-4 text-slate-400 hover:text-white p-1 rounded-full hover:bg-slate-700/50 transition"
-            >
+            <button onClick={() => setShowAbout(false)} className="absolute top-4 right-4 text-slate-400 hover:text-white p-1 rounded-full hover:bg-slate-700/50">
               <X className="w-4 h-4" />
             </button>
-
-            <div className="w-16 h-16 bg-gradient-to-br from-indigo-500 to-blue-600 rounded-2xl flex items-center justify-center text-white shadow-lg border border-indigo-400/30">
+            <div className="w-16 h-16 bg-gradient-to-br from-indigo-500 to-blue-600 rounded-2xl flex items-center justify-center text-white shadow-lg">
               <Split className="w-8 h-8" />
             </div>
-
             <div>
-              <h3 className="text-lg font-bold text-white">BagiPDF</h3>
-              <p className="text-xs text-slate-400 mt-1">Versi 1.2.2 • Native Desktop Application</p>
+              <h3 className="text-lg font-bold text-white">BagiPDF Suite</h3>
+              <p className="text-xs text-slate-400 mt-1">Versi 2.0.0 • Rust & Tauri Engine</p>
             </div>
-
             <div className="w-full bg-slate-900/60 border border-slate-700/50 rounded-xl p-4 text-xs text-slate-300 space-y-2.5 text-left">
-              <div className="flex items-center gap-2.5">
-                <User className="w-4 h-4 text-indigo-400 flex-shrink-0" />
-                <span>Pengembang: <strong>Franky Setiawan</strong></span>
-              </div>
-              <div className="flex items-center gap-2.5">
-                <Globe className="w-4 h-4 text-indigo-400 flex-shrink-0" />
-                <span>Website: <a href="https://www.frm.web.id" target="_blank" rel="noreferrer" className="text-indigo-400 hover:underline font-medium">https://www.frm.web.id</a></span>
-              </div>
+              <div className="flex items-center gap-2.5"><User className="w-4 h-4 text-indigo-400" /><span>Pengembang: <strong>Franky Setiawan</strong></span></div>
+              <div className="flex items-center gap-2.5"><Globe className="w-4 h-4 text-indigo-400" /><span>Website: <a href="https://www.frm.web.id" target="_blank" rel="noreferrer" className="text-indigo-400 hover:underline font-medium">https://www.frm.web.id</a></span></div>
             </div>
-
-            <p className="text-[11px] text-slate-400">
-              Aplikasi pemotong file PDF mandiri dengan visual preview modern untuk Windows 11 & Windows 10 x86_64.
-            </p>
-
-            <button 
-              onClick={() => setShowAbout(false)}
-              className="w-full bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white font-medium py-2 rounded-lg text-xs transition"
-            >
-              Tutup
-            </button>
+            <p className="text-[11px] text-slate-400">Aplikasi pengelolaan PDF lengkap (Split, Merge, Watermark, Edit, PDF to Excel) mandiri & offline.</p>
+            <button onClick={() => setShowAbout(false)} className="w-full bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white py-2 rounded-lg text-xs">Tutup</button>
           </div>
         </div>
       )}
