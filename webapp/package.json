@@ -3,7 +3,7 @@
   "version": "1.2.1",
   "type": "module",
   "description": "BagiPDF - Portable Windows PDF Splitter Application by Franky Setiawan",
-  "main": "electron.js",
+  "main": "electron.cjs",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
@@ -22,7 +22,7 @@
     },
     "files": [
       "dist/**/*",
-      "electron.js"
+      "electron.cjs"
     ],
     "win": {
       "target": [
