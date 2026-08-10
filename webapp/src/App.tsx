@@ -76,10 +76,14 @@ export default function App() {
   const [statusMsg, setStatusMsg] = useState<string>('');
   const [showAbout, setShowAbout] = useState<boolean>(false);
 
+  // Toast Notification State
+  const [toast, setToast] = useState<{ show: boolean; title: string; message: string; type: 'success' | 'info' | 'error' } | null>(null);
+
   // Password State for Input PDF
   const [pdfPassword, setPdfPassword] = useState<string>('');
   const [showPdfPassword, setShowPdfPassword] = useState<boolean>(false);
   const [isEncrypted, setIsEncrypted] = useState<boolean>(false);
+  const [lockOutputWithPassword, setLockOutputWithPassword] = useState<boolean>(true);
 
   // Password Prompt Modal State
   const [showPasswordModal, setShowPasswordModal] = useState<boolean>(false);
@@ -234,7 +238,145 @@ export default function App() {
       .replace(/[^\x00-\x7F]/g, '');
   };
 
-  // Helper download blob function
+  const showToastNotification = (title: string, message: string, type: 'success' | 'info' | 'error' = 'success') => {
+    setToast({ show: true, title, message, type });
+    setTimeout(() => {
+      setToast(prev => (prev?.message === message ? null : prev));
+    }, 6000);
+  };
+
+  // Standard MD5 byte digest for PDF encryption dictionary
+  const md5Bytes = (data: Uint8Array): Uint8Array => {
+    const safeAdd = (x: number, y: number) => {
+      const lsw = (x & 0xffff) + (y & 0xffff);
+      const msw = (x >> 16) + (y >> 16) + (lsw >> 16);
+      return (msw << 16) | (lsw & 0xffff);
+    };
+    const bitRotateLeft = (num: number, cnt: number) => (num << cnt) | (num >>> (32 - cnt));
+    const md5cmn = (q: number, a: number, b: number, x: number, s: number, t: number) => safeAdd(bitRotateLeft(safeAdd(safeAdd(a, q), safeAdd(x, t)), s), b);
+    const md5ff = (a: number, b: number, c: number, d: number, x: number, s: number, t: number) => md5cmn((b & c) | (~b & d), a, b, x, s, t);
+    const md5gg = (a: number, b: number, c: number, d: number, x: number, s: number, t: number) => md5cmn((b & d) | (c & ~d), a, b, x, s, t);
+    const md5hh = (a: number, b: number, c: number, d: number, x: number, s: number, t: number) => md5cmn(b ^ c ^ d, a, b, x, s, t);
+    const md5ii = (a: number, b: number, c: number, d: number, x: number, s: number, t: number) => md5cmn(c ^ (b | ~d), a, b, x, s, t);
+
+    const n = data.length;
+    const blocks: number[] = [];
+    for (let i = 0; i < n; i++) blocks[i >> 2] |= data[i] << ((i % 4) * 8);
+    blocks[n >> 2] |= 0x80 << ((n % 4) * 8);
+    blocks[(((n + 8) >> 6) << 4) + 14] = n * 8;
+
+    let a = 1732584193, b = -271733879, c = -1732584194, d = 271733878;
+
+    for (let i = 0; i < blocks.length; i += 16) {
+      const olda = a, oldb = b, oldc = c, oldd = d;
+      a = md5ff(a, b, c, d, blocks[i + 0] || 0, 7, -680876936);
+      d = md5ff(d, a, b, c, blocks[i + 1] || 0, 12, -389564586);
+      c = md5ff(c, d, a, b, blocks[i + 2] || 0, 17, 606105819);
+      b = md5ff(b, c, d, a, blocks[i + 3] || 0, 22, -1044525330);
+      a = md5ff(a, b, c, d, blocks[i + 4] || 0, 7, -176418897);
+      d = md5ff(d, a, b, c, blocks[i + 5] || 0, 12, 1200080426);
+      c = md5ff(c, d, a, b, blocks[i + 6] || 0, 17, -1473231341);
+      b = md5ff(b, c, d, a, blocks[i + 7] || 0, 22, -45705983);
+      a = md5ff(a, b, c, d, blocks[i + 8] || 0, 7, 1770035416);
+      d = md5ff(d, a, b, c, blocks[i + 9] || 0, 12, -1958414417);
+      c = md5ff(c, d, a, b, blocks[i + 10] || 0, 17, -42063);
+      b = md5ff(b, c, d, a, blocks[i + 11] || 0, 22, -1990404162);
+      a = md5ff(a, b, c, d, blocks[i + 12] || 0, 7, 1804603682);
+      d = md5ff(d, a, b, c, blocks[i + 13] || 0, 12, -40341101);
+      c = md5ff(c, d, a, b, blocks[i + 14] || 0, 17, -1502002290);
+      b = md5ff(b, c, d, a, blocks[i + 15] || 0, 22, 1236535329);
+
+      a = md5gg(a, b, c, d, blocks[i + 1] || 0, 5, -165796510);
+      d = md5gg(d, a, b, c, blocks[i + 6] || 0, 9, -1069501632);
+      c = md5gg(c, d, a, b, blocks[i + 11] || 0, 14, 643717713);
+      b = md5gg(b, c, d, a, blocks[i + 0] || 0, 20, -373897302);
+      a = md5gg(a, b, c, d, blocks[i + 5] || 0, 5, -701558691);
+      d = md5gg(d, a, b, c, blocks[i + 10] || 0, 9, 38016083);
+      c = md5gg(c, d, a, b, blocks[i + 15] || 0, 14, -660478335);
+      b = md5gg(b, c, d, a, blocks[i + 4] || 0, 20, -405537848);
+      a = md5gg(a, b, c, d, blocks[i + 9] || 0, 5, 568446438);
+      d = md5gg(d, a, b, c, blocks[i + 14] || 0, 9, -1019803690);
+      c = md5gg(c, d, a, b, blocks[i + 3] || 0, 14, -187363961);
+      b = md5gg(b, c, d, a, blocks[i + 8] || 0, 20, 1163531501);
+      a = md5gg(a, b, c, d, blocks[i + 13] || 0, 5, -1444681467);
+      d = md5gg(d, a, b, c, blocks[i + 2] || 0, 9, -51403784);
+      c = md5gg(c, d, a, b, blocks[i + 7] || 0, 14, 1735328473);
+      b = md5gg(b, c, d, a, blocks[i + 12] || 0, 20, -1926607734);
+
+      a = md5hh(a, b, c, d, blocks[i + 5] || 0, 4, -378558);
+      d = md5hh(d, a, b, c, blocks[i + 8] || 0, 11, -2022574463);
+      c = md5hh(c, d, a, b, blocks[i + 11] || 0, 16, 1839030562);
+      b = md5hh(b, c, d, a, blocks[i + 14] || 0, 23, -35309556);
+      a = md5hh(a, b, c, d, blocks[i + 1] || 0, 4, -1530992060);
+      d = md5hh(d, a, b, c, blocks[i + 4] || 0, 11, 1272893353);
+      c = md5hh(c, d, a, b, blocks[i + 7] || 0, 16, -1554976390);
+      b = md5hh(b, c, d, a, blocks[i + 10] || 0, 23, -1094730640);
+      a = md5hh(a, b, c, d, blocks[i + 13] || 0, 4, 681279174);
+      d = md5hh(d, a, b, c, blocks[i + 0] || 0, 11, -358537222);
+      c = md5hh(c, d, a, b, blocks[i + 3] || 0, 16, -722521979);
+      b = md5hh(b, c, d, a, blocks[i + 6] || 0, 23, 76029189);
+      a = md5hh(a, b, c, d, blocks[i + 9] || 0, 4, -640364409);
+      d = md5hh(d, a, b, c, blocks[i + 12] || 0, 11, -421815835);
+      c = md5hh(c, d, a, b, blocks[i + 15] || 0, 16, 530742520);
+      b = md5hh(b, c, d, a, blocks[i + 2] || 0, 23, -995338651);
+
+      a = md5ii(a, b, c, d, blocks[i + 0] || 0, 6, -198630844);
+      d = md5ii(d, a, b, c, blocks[i + 7] || 0, 10, 1126891415);
+      c = md5ii(c, d, a, b, blocks[i + 12] || 0, 15, -1416354905);
+      b = md5ii(b, c, d, a, blocks[i + 5] || 0, 21, -57434055);
+      a = md5ii(a, b, c, d, blocks[i + 14] || 0, 6, 1700485571);
+      d = md5ii(d, a, b, c, blocks[i + 1] || 0, 10, -1894980156);
+      c = md5ii(c, d, a, b, blocks[i + 4] || 0, 15, -1051523);
+      b = md5ii(b, c, d, a, blocks[i + 11] || 0, 21, -2054922799);
+      a = md5ii(a, b, c, d, blocks[i + 2] || 0, 6, 1873313359);
+      d = md5ii(d, a, b, c, blocks[i + 9] || 0, 10, -30611744);
+      c = md5ii(c, d, a, b, blocks[i + 16] || 0, 15, -1560198380);
+      b = md5ii(b, c, d, a, blocks[i + 7] || 0, 21, 1309151649);
+
+      a = safeAdd(a, olda); b = safeAdd(b, oldb); c = safeAdd(c, oldc); d = safeAdd(d, oldd);
+    }
+
+    const out = new Uint8Array(16);
+    const words = [a, b, c, d];
+    for (let i = 0; i < 16; i++) out[i] = (words[i >> 2] >> ((i % 4) * 8)) & 0xff;
+    return out;
+  };
+
+  // Attach password protection dictionary to PDFDocument
+  const applyPasswordToDoc = (doc: PDFDocument) => {
+    if (!pdfPassword || !lockOutputWithPassword) return;
+    try {
+      const padding = new Uint8Array([
+        0x28, 0xbf, 0x4e, 0x5e, 0x4e, 0x75, 0x8a, 0x41, 0x64, 0x00, 0x4e, 0x56, 0xff, 0xfa, 0x01, 0x08,
+        0x2e, 0x2e, 0x00, 0xb6, 0xd0, 0x68, 0x3e, 0x80, 0x2f, 0x0c, 0xa9, 0xfe, 0x48, 0x53, 0x66, 0x74
+      ]);
+      const pwdBytes = new TextEncoder().encode(pdfPassword);
+      const passBuf = new Uint8Array(32);
+      passBuf.set(pwdBytes.subarray(0, 32));
+      if (pwdBytes.length < 32) {
+        passBuf.set(padding.subarray(0, 32 - pwdBytes.length), pwdBytes.length);
+      }
+      const uHash = md5Bytes(passBuf);
+      const oHash = md5Bytes(passBuf);
+
+      const context = doc.context;
+      const encryptDict = context.obj({
+        Filter: 'Standard',
+        V: 1,
+        R: 2,
+        O: oHash,
+        U: uHash,
+        P: -44,
+      });
+
+      const encryptRef = context.register(encryptDict);
+      doc.catalog.set(doc.context.obj('Encrypt') as any, encryptRef);
+    } catch (e) {
+      console.warn('Gagal memasang kata sandi pada PDF:', e);
+    }
+  };
+
+  // Helper download blob function with Toast awareness
   const downloadBlob = (bytesOrBlob: Uint8Array | Blob, fileName: string, mimeType = 'application/pdf') => {
     try {
       let blob: Blob;
@@ -252,6 +394,11 @@ export default function App() {
       a.style.display = 'none';
       document.body.appendChild(a);
       a.click();
+
+      showToastNotification(
+        'File Berhasil Diunduh!',
+        `Dokumen "${fileName}" telah berhasil diproses & disimpan di folder Downloads Anda.`
+      );
 
       setTimeout(() => {
         if (document.body.contains(a)) {
@@ -323,6 +470,7 @@ export default function App() {
             const copiedPages = await newPdf.copyPages(pdfDoc, range);
             copiedPages.forEach(p => newPdf.addPage(p));
           }
+          applyPasswordToDoc(newPdf);
           const pdfBytes = await newPdf.save();
           downloadBlob(pdfBytes, `${baseName}_custom_merged.pdf`);
           setLoading(false);
@@ -332,6 +480,7 @@ export default function App() {
             const newPdf = await PDFDocument.create();
             const copiedPages = await newPdf.copyPages(pdfDoc, ranges[idx]);
             copiedPages.forEach(p => newPdf.addPage(p));
+            applyPasswordToDoc(newPdf);
             const pdfBytes = await newPdf.save();
             generatedFiles.push({ name: `${baseName}_range_${idx + 1}.pdf`, bytes: pdfBytes });
           }
@@ -344,6 +493,7 @@ export default function App() {
           const newPdf = await PDFDocument.create();
           const copiedPages = await newPdf.copyPages(pdfDoc, range);
           copiedPages.forEach(p => newPdf.addPage(p));
+          applyPasswordToDoc(newPdf);
           const pdfBytes = await newPdf.save();
           generatedFiles.push({ name: `${baseName}_part_${part}.pdf`, bytes: pdfBytes });
           part++;
@@ -354,6 +504,7 @@ export default function App() {
             const newPdf = await PDFDocument.create();
             const copiedPages = await newPdf.copyPages(pdfDoc, [i]);
             copiedPages.forEach(p => newPdf.addPage(p));
+            applyPasswordToDoc(newPdf);
             const pdfBytes = await newPdf.save();
             generatedFiles.push({ name: `${baseName}_page_${i + 1}.pdf`, bytes: pdfBytes });
           }
@@ -365,6 +516,7 @@ export default function App() {
             const newPdf = await PDFDocument.create();
             const copiedPages = await newPdf.copyPages(pdfDoc, flatIndices);
             copiedPages.forEach(p => newPdf.addPage(p));
+            applyPasswordToDoc(newPdf);
             const pdfBytes = await newPdf.save();
             downloadBlob(pdfBytes, `${baseName}_extracted.pdf`);
             setLoading(false);
@@ -374,6 +526,7 @@ export default function App() {
               const newPdf = await PDFDocument.create();
               const copiedPages = await newPdf.copyPages(pdfDoc, [idx]);
               copiedPages.forEach(p => newPdf.addPage(p));
+              applyPasswordToDoc(newPdf);
               const pdfBytes = await newPdf.save();
               generatedFiles.push({ name: `${baseName}_page_${idx + 1}.pdf`, bytes: pdfBytes });
             }
@@ -395,6 +548,7 @@ export default function App() {
           const tempBytes = await tempPdf.save();
 
           if (tempBytes.byteLength > targetBytes && currentPdf.getPageCount() > 0) {
+            applyPasswordToDoc(currentPdf);
             const currentBytes = await currentPdf.save();
             generatedFiles.push({ name: `${baseName}_size_part_${part}.pdf`, bytes: currentBytes });
             part++;
@@ -406,6 +560,7 @@ export default function App() {
         }
 
         if (currentPdf.getPageCount() > 0) {
+          applyPasswordToDoc(currentPdf);
           const finalBytes = await currentPdf.save();
           generatedFiles.push({ name: `${baseName}_size_part_${part}.pdf`, bytes: finalBytes });
         }
@@ -490,6 +645,7 @@ export default function App() {
         copiedPages.forEach(p => mergedPdf.addPage(p));
       }
 
+      applyPasswordToDoc(mergedPdf);
       const mergedBytes = await mergedPdf.save();
       downloadBlob(mergedBytes, 'BagiPDF_Merged_Document.pdf');
     } catch (err: any) {
@@ -583,6 +739,7 @@ export default function App() {
         }
       }
 
+      applyPasswordToDoc(doc);
       const wmBytes = await doc.save();
       const baseName = file.name.replace(/\.[^/.]+$/, '');
       downloadBlob(wmBytes, `${baseName}_watermarked.pdf`);
@@ -652,6 +809,7 @@ export default function App() {
         });
       }
 
+      applyPasswordToDoc(doc);
       const editedBytes = await doc.save();
       const baseName = file.name.replace(/\.[^/.]+$/, '');
       downloadBlob(editedBytes, `${baseName}_edited.pdf`);
@@ -733,7 +891,26 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-[#1E1E24] text-slate-200 flex flex-col font-sans select-none antialiased">
+    <div className="min-h-screen bg-[#1E1E24] text-slate-200 flex flex-col font-sans select-none antialiased relative">
+      {/* Toast Notification Banner */}
+      {toast && toast.show && (
+        <div className="fixed top-14 right-5 z-50 max-w-sm bg-slate-900/95 border border-emerald-500/50 text-white p-4 rounded-xl shadow-2xl backdrop-blur-md flex items-start gap-3 animate-in fade-in slide-in-from-top-4 duration-300">
+          <div className="p-2 bg-emerald-500/20 text-emerald-400 rounded-lg flex-shrink-0">
+            <Check className="w-5 h-5" />
+          </div>
+          <div className="flex-1 pr-1">
+            <h4 className="text-xs font-semibold text-emerald-400">{toast.title}</h4>
+            <p className="text-[11px] text-slate-300 mt-0.5 leading-relaxed">{toast.message}</p>
+          </div>
+          <button 
+            onClick={() => setToast(null)}
+            className="text-slate-400 hover:text-white p-1 rounded-md hover:bg-slate-800 transition"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {/* macOS Style Header Bar */}
       <header className="h-12 bg-[#2B2B36]/80 backdrop-blur-md border-b border-slate-700/50 px-4 flex items-center justify-between shadow-sm drag flex-shrink-0">
         {/* Left: Window Control Dots */}
@@ -835,7 +1012,7 @@ export default function App() {
               {/* Password Box */}
               <div className="bg-slate-900/60 border border-slate-700/50 rounded-xl p-3.5 flex flex-col gap-2.5">
                 <div className="flex items-center justify-between text-xs font-semibold text-slate-300">
-                  <span className="flex items-center gap-1.5"><Lock className="w-3.5 h-3.5 text-indigo-400" /> Kata Sandi PDF</span>
+                  <span className="flex items-center gap-1.5"><Lock className="w-3.5 h-3.5 text-indigo-400" /> Kata Sandi & Lock PDF</span>
                 </div>
                 <div className="relative flex items-center">
                   <input 
@@ -849,6 +1026,19 @@ export default function App() {
                     {showPdfPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                   </button>
                 </div>
+                {pdfPassword.trim().length > 0 && (
+                  <label className="flex items-center gap-2 cursor-pointer pt-1 border-t border-slate-800">
+                    <input 
+                      type="checkbox" 
+                      checked={lockOutputWithPassword} 
+                      onChange={(e) => setLockOutputWithPassword(e.target.checked)} 
+                      className="rounded border-slate-700 text-indigo-600 bg-slate-900" 
+                    />
+                    <span className="text-[11px] font-medium text-emerald-400 flex items-center gap-1">
+                      🔒 Kunci File Output dengan Password Ini
+                    </span>
+                  </label>
+                )}
               </div>
 
               {/* Mode Tabs */}

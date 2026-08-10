@@ -35,11 +35,10 @@ jobs:
           cd webapp
           npm run dist:win
 
-      - name: Upload BagiPDF Executable Artifact
+      - name: Upload BagiPDF Executable & MSI Installer Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: BagiPDF-Windows-x64
+          name: BagiPDF-Windows-x64-v2.0.0
           path: |
-            dist_electron/BagiPDF-v*.exe
-            webapp/dist_electron/BagiPDF-v*.exe
-            webapp/src-tauri/target/release/bundle/**/*.exe
+            webapp/src-tauri/target/release/bundle/nsis/*.exe
+            webapp/src-tauri/target/release/bundle/msi/*.msi
