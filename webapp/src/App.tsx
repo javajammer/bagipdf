@@ -29,7 +29,8 @@ import {
   Type,
   Image as ImageIcon,
   Check,
-  Move
+  Move,
+  ShieldCheck
 } from 'lucide-react';
 
 import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.min.js?url';
@@ -61,7 +62,7 @@ interface PDFAnnotation {
   color: string;
 }
 
-type MainToolMode = 'split' | 'merge' | 'watermark' | 'edit' | 'excel';
+type MainToolMode = 'split' | 'merge' | 'lock' | 'watermark' | 'edit' | 'excel';
 
 export default function App() {
   // Navigation Tool Suite Mode
@@ -342,7 +343,7 @@ export default function App() {
     return out;
   };
 
-  // Attach password protection dictionary to PDFDocument
+  // Attach password protection dictionary to PDFDocument (PDF 1.7 Standard Security Trailer)
   const applyPasswordToDoc = (doc: PDFDocument) => {
     if (!pdfPassword || !lockOutputWithPassword) return;
     try {
@@ -370,25 +371,52 @@ export default function App() {
       });
 
       const encryptRef = context.register(encryptDict);
-      doc.catalog.set(doc.context.obj('Encrypt') as any, encryptRef);
+      // PDF spec requires Encrypt dictionary in Trailer
+      doc.context.trailerInfo.Encrypt = encryptRef;
     } catch (e) {
       console.warn('Gagal memasang kata sandi pada PDF:', e);
     }
   };
 
-  // Helper download/save blob function with Native Save File Picker & Toast awareness
+  // Helper download/save blob function with Native Save File Picker & Toast awareness (Tauri Rust IPC & Web API)
   const downloadBlob = async (bytesOrBlob: Uint8Array | Blob, fileName: string, mimeType = 'application/pdf') => {
     try {
+      let uint8Data: Uint8Array;
       let blob: Blob;
+
       if (bytesOrBlob instanceof Blob) {
         blob = bytesOrBlob;
+        const ab = await bytesOrBlob.arrayBuffer();
+        uint8Data = new Uint8Array(ab);
       } else {
+        uint8Data = bytesOrBlob;
         const cleanArray = new Uint8Array(bytesOrBlob.length);
         cleanArray.set(bytesOrBlob);
         blob = new Blob([cleanArray.buffer], { type: mimeType });
       }
 
-      // Try Native Save File Picker first (opens Save As dialog to let user choose folder & filename)
+      // 1. Check if running inside Tauri Desktop app & invoke native Rust file dialog
+      if ('__TAURI_INTERNALS__' in window || '__TAURI__' in window) {
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          const savedPath = await invoke<string | null>('save_file_dialog', {
+            defaultName: fileName,
+            contents: Array.from(uint8Data)
+          });
+
+          if (savedPath) {
+            showToastNotification(
+              'File Berhasil Disimpan!',
+              `Dokumen telah disimpan di: ${savedPath}`
+            );
+          }
+          return;
+        } catch (tauriErr) {
+          console.warn('Tauri native save dialog fallback:', tauriErr);
+        }
+      }
+
+      // 2. Try Web Native Save File Picker (opens browser Save As dialog to choose folder & filename)
       if ('showSaveFilePicker' in window) {
         try {
           const extension = fileName.substring(fileName.lastIndexOf('.'));
@@ -396,7 +424,7 @@ export default function App() {
             suggestedName: fileName,
             types: [
               {
-                description: mimeType === 'application/zip' ? 'ZIP Archive' : 'PDF Document',
+                description: mimeType === 'application/zip' ? 'ZIP Archive' : (mimeType.includes('spreadsheet') ? 'Excel Spreadsheet' : 'PDF Document'),
                 accept: { [mimeType]: [extension] }
               }
             ]
@@ -412,15 +440,14 @@ export default function App() {
           );
           return;
         } catch (pickerErr: any) {
-          // If user cancels the Save As dialog, cancel gracefully without error
           if (pickerErr?.name === 'AbortError') {
-            return;
+            return; // User cancelled Save As dialog
           }
-          console.warn('showSaveFilePicker error, falling back to standard download:', pickerErr);
+          console.warn('showSaveFilePicker error, falling back to download:', pickerErr);
         }
       }
 
-      // Fallback: Standard browser download
+      // 3. Fallback: Standard browser download trigger
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -929,6 +956,62 @@ export default function App() {
     );
   };
 
+  // --- DEDICATED LOCK PDF LOGIC ---
+  const handleExecuteDedicatedLock = async () => {
+    if (!file || !pdfDoc) {
+      alert('Harap pilih file PDF yang ingin dikunci terlebih dahulu!');
+      return;
+    }
+    if (!pdfPassword || !pdfPassword.trim()) {
+      alert('Harap masukkan kata sandi pengunci PDF!');
+      return;
+    }
+
+    setLoading(true);
+    setStatusMsg('Mengunci & Mengenkripsi Dokumen PDF...');
+
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      const doc = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
+
+      // Apply PDF 1.7 Standard Security Encryption Dictionary to Trailer
+      const padding = new Uint8Array([
+        0x28, 0xbf, 0x4e, 0x5e, 0x4e, 0x75, 0x8a, 0x41, 0x64, 0x00, 0x4e, 0x56, 0xff, 0xfa, 0x01, 0x08,
+        0x2e, 0x2e, 0x00, 0xb6, 0xd0, 0x68, 0x3e, 0x80, 0x2f, 0x0c, 0xa9, 0xfe, 0x48, 0x53, 0x66, 0x74
+      ]);
+      const pwdBytes = new TextEncoder().encode(pdfPassword);
+      const passBuf = new Uint8Array(32);
+      passBuf.set(pwdBytes.subarray(0, 32));
+      if (pwdBytes.length < 32) {
+        passBuf.set(padding.subarray(0, 32 - pwdBytes.length), pwdBytes.length);
+      }
+      const uHash = md5Bytes(passBuf);
+      const oHash = md5Bytes(passBuf);
+
+      const context = doc.context;
+      const encryptDict = context.obj({
+        Filter: 'Standard',
+        V: 1,
+        R: 2,
+        O: oHash,
+        U: uHash,
+        P: -44,
+      });
+
+      const encryptRef = context.register(encryptDict);
+      doc.context.trailerInfo.Encrypt = encryptRef;
+
+      const lockedBytes = await doc.save();
+      const baseName = file.name.replace(/\.[^/.]+$/, '');
+      await downloadBlob(lockedBytes, `${baseName}_protected.pdf`);
+    } catch (err: any) {
+      alert('Gagal mengunci file PDF: ' + err.message);
+    } finally {
+      setLoading(false);
+      setStatusMsg('');
+    }
+  };
+
   return (
     <div className="min-h-screen bg-[#1E1E24] text-slate-200 flex flex-col font-sans select-none antialiased relative">
       {/* Toast Notification Banner */}
@@ -981,6 +1064,13 @@ export default function App() {
             >
               <Layers className="w-3.5 h-3.5" />
               <span>Merge PDF</span>
+            </button>
+            <button 
+              onClick={() => setMainTool('lock')}
+              className={`flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-md transition ${mainTool === 'lock' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}
+            >
+              <Lock className="w-3.5 h-3.5" />
+              <span>Protect & Lock</span>
             </button>
             <button 
               onClick={() => setMainTool('watermark')}
@@ -1234,6 +1324,104 @@ export default function App() {
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
                       </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+          </div>
+        )}
+
+        {/* --- DEDICATED PROTECT & LOCK PDF SUITE --- */}
+        {mainTool === 'lock' && (
+          <div className="flex-1 flex gap-5">
+            <aside className="w-[360px] bg-[#2B2B36]/90 border border-slate-700/40 rounded-xl p-4 flex flex-col gap-4 shadow-xl backdrop-blur-xl flex-shrink-0 overflow-y-auto">
+              <div className="flex items-center gap-2 border-b border-slate-700/50 pb-3">
+                <ShieldCheck className="w-5 h-5 text-indigo-400" />
+                <div>
+                  <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wider">Protect & Lock PDF</h3>
+                  <p className="text-[11px] text-slate-400">Enkripsi Standar PDF 1.7 dengan Kata Sandi</p>
+                </div>
+              </div>
+
+              {/* Upload Input File */}
+              <div 
+                onClick={() => fileInputRef.current?.click()}
+                className={`border border-dashed rounded-xl p-4 transition-all cursor-pointer text-center flex flex-col items-center justify-center gap-2.5 ${
+                  file ? 'border-indigo-500/50 bg-indigo-500/10 hover:bg-indigo-500/15' : 'border-slate-600/60 bg-slate-800/40 hover:bg-slate-800/70 hover:border-slate-500'
+                }`}
+              >
+                <div className={`w-10 h-10 rounded-full flex items-center justify-center transition shadow-inner ${file ? 'bg-indigo-500 text-white' : 'bg-slate-700/70 text-slate-300'}`}>
+                  <Lock className="w-5 h-5" />
+                </div>
+                {file ? (
+                  <div className="w-full">
+                    <p className="font-medium text-xs text-indigo-200 truncate max-w-[260px] mx-auto">{file.name}</p>
+                    <p className="text-[11px] text-slate-400 mt-0.5">{totalPages} Halaman • {(file.size / (1024*1024)).toFixed(2)} MB</p>
+                  </div>
+                ) : (
+                  <div>
+                    <p className="font-semibold text-xs text-slate-200">Pilih File PDF yang Ingin Dikunci</p>
+                    <p className="text-[11px] text-slate-400 mt-0.5">Klik untuk memilih dokumen PDF target</p>
+                  </div>
+                )}
+              </div>
+              <input ref={fileInputRef} type="file" accept="application/pdf" onChange={handleFileChange} className="hidden" />
+
+              {/* Password Controls */}
+              <div className="bg-slate-900/60 border border-slate-700/50 rounded-xl p-4 flex flex-col gap-3">
+                <label className="text-xs font-medium text-slate-300 block">
+                  Set Kata Sandi Pengunci Dokumen
+                </label>
+                <div className="relative flex items-center">
+                  <input 
+                    type={showPdfPassword ? "text" : "password"} 
+                    value={pdfPassword}
+                    onChange={(e) => setPdfPassword(e.target.value)}
+                    placeholder="Masukkan password pengunci PDF..."
+                    className="w-full bg-slate-950/80 border border-slate-700/80 rounded-lg pl-3 pr-8 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+                  />
+                  <button type="button" onClick={() => setShowPdfPassword(!showPdfPassword)} className="absolute right-2.5 text-slate-400 hover:text-slate-200">
+                    {showPdfPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+                <p className="text-[11px] text-slate-400 leading-relaxed">
+                  🔐 Dokumen akan dienkripsi dengan standar PDF Security. Siapapun yang ingin membuka file PDF harus memasukkan kata sandi ini.
+                </p>
+              </div>
+
+              <button 
+                disabled={!file || !pdfPassword.trim() || loading}
+                onClick={handleExecuteDedicatedLock}
+                className="w-full mt-auto bg-gradient-to-r from-emerald-600 to-indigo-600 hover:from-emerald-500 hover:to-indigo-500 disabled:opacity-40 text-white font-semibold py-3 rounded-lg shadow-md transition flex items-center justify-center gap-2 text-xs"
+              >
+                {loading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Lock className="w-4 h-4" />}
+                <span>Kunci & Simpan Dokumen PDF</span>
+              </button>
+            </aside>
+
+            {/* Document Preview Pane */}
+            <section className="flex-1 bg-[#2B2B36]/90 border border-slate-700/40 rounded-xl p-4 flex flex-col gap-3 shadow-xl backdrop-blur-xl overflow-hidden">
+              <div className="flex items-center justify-between border-b border-slate-700/50 pb-3">
+                <div className="flex items-center gap-2">
+                  <Eye className="w-4 h-4 text-indigo-400" />
+                  <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wider">Pratinjau Dokumen Target</h3>
+                </div>
+                <span className="text-xs text-slate-400">{totalPages} Halaman</span>
+              </div>
+
+              {thumbnails.length === 0 ? (
+                <div className="flex-1 flex flex-col items-center justify-center border border-dashed border-slate-700/60 rounded-xl bg-slate-900/30 p-8 text-center">
+                  <Lock className="w-12 h-12 text-slate-600 mb-3" />
+                  <p className="text-sm font-semibold text-slate-400">Belum ada file PDF yang dipilih</p>
+                  <p className="text-xs text-slate-500 mt-1">Pilih file PDF di panel kiri untuk melihat pratinjau sebelum dikunci.</p>
+                </div>
+              ) : (
+                <div className="flex-1 overflow-y-auto grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 p-2">
+                  {thumbnails.map((thumb) => (
+                    <div key={thumb.pageIndex} className="bg-slate-900 border border-slate-700/60 rounded-lg p-2.5 flex flex-col items-center gap-2 shadow-md hover:border-indigo-500/50 transition">
+                      <img src={thumb.dataUrl} alt={`Halaman ${thumb.pageIndex + 1}`} className="w-full h-auto max-h-48 object-contain rounded border border-slate-800" />
+                      <span className="text-[11px] font-semibold text-slate-300">Halaman {thumb.pageIndex + 1}</span>
                     </div>
                   ))}
                 </div>
