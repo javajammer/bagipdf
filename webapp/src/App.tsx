@@ -376,8 +376,8 @@ export default function App() {
     }
   };
 
-  // Helper download blob function with Toast awareness
-  const downloadBlob = (bytesOrBlob: Uint8Array | Blob, fileName: string, mimeType = 'application/pdf') => {
+  // Helper download/save blob function with Native Save File Picker & Toast awareness
+  const downloadBlob = async (bytesOrBlob: Uint8Array | Blob, fileName: string, mimeType = 'application/pdf') => {
     try {
       let blob: Blob;
       if (bytesOrBlob instanceof Blob) {
@@ -387,6 +387,40 @@ export default function App() {
         cleanArray.set(bytesOrBlob);
         blob = new Blob([cleanArray.buffer], { type: mimeType });
       }
+
+      // Try Native Save File Picker first (opens Save As dialog to let user choose folder & filename)
+      if ('showSaveFilePicker' in window) {
+        try {
+          const extension = fileName.substring(fileName.lastIndexOf('.'));
+          const fileHandle = await (window as any).showSaveFilePicker({
+            suggestedName: fileName,
+            types: [
+              {
+                description: mimeType === 'application/zip' ? 'ZIP Archive' : 'PDF Document',
+                accept: { [mimeType]: [extension] }
+              }
+            ]
+          });
+
+          const writableStream = await fileHandle.createWritable();
+          await writableStream.write(blob);
+          await writableStream.close();
+
+          showToastNotification(
+            'File Berhasil Disimpan!',
+            `Dokumen "${fileName}" telah berhasil disimpan di lokasi pilihan Anda.`
+          );
+          return;
+        } catch (pickerErr: any) {
+          // If user cancels the Save As dialog, cancel gracefully without error
+          if (pickerErr?.name === 'AbortError') {
+            return;
+          }
+          console.warn('showSaveFilePicker error, falling back to standard download:', pickerErr);
+        }
+      }
+
+      // Fallback: Standard browser download
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -397,7 +431,7 @@ export default function App() {
 
       showToastNotification(
         'File Berhasil Diunduh!',
-        `Dokumen "${fileName}" telah berhasil diproses & disimpan di folder Downloads Anda.`
+        `Dokumen "${fileName}" telah berhasil diproses & disimpan.`
       );
 
       setTimeout(() => {
@@ -407,7 +441,7 @@ export default function App() {
         URL.revokeObjectURL(url);
       }, 2000);
     } catch (err: any) {
-      alert('Gagal mengunduh file: ' + err.message);
+      alert('Gagal menyimpan file: ' + err.message);
     }
   };
 
@@ -472,7 +506,7 @@ export default function App() {
           }
           applyPasswordToDoc(newPdf);
           const pdfBytes = await newPdf.save();
-          downloadBlob(pdfBytes, `${baseName}_custom_merged.pdf`);
+          await downloadBlob(pdfBytes, `${baseName}_custom_merged.pdf`);
           setLoading(false);
           return;
         } else {
@@ -518,7 +552,7 @@ export default function App() {
             copiedPages.forEach(p => newPdf.addPage(p));
             applyPasswordToDoc(newPdf);
             const pdfBytes = await newPdf.save();
-            downloadBlob(pdfBytes, `${baseName}_extracted.pdf`);
+            await downloadBlob(pdfBytes, `${baseName}_extracted.pdf`);
             setLoading(false);
             return;
           } else {
@@ -567,11 +601,11 @@ export default function App() {
       }
 
       if (generatedFiles.length === 1) {
-        downloadBlob(generatedFiles[0].bytes, generatedFiles[0].name, 'application/pdf');
+        await downloadBlob(generatedFiles[0].bytes, generatedFiles[0].name, 'application/pdf');
       } else if (generatedFiles.length > 1) {
         generatedFiles.forEach(f => zip.file(f.name, f.bytes, { binary: true }));
         const zipBlob = await zip.generateAsync({ type: 'blob', mimeType: 'application/zip' });
-        downloadBlob(zipBlob, `${baseName}_split_files.zip`, 'application/zip');
+        await downloadBlob(zipBlob, `${baseName}_split_files.zip`, 'application/zip');
       }
 
     } catch (err: any) {
@@ -647,7 +681,7 @@ export default function App() {
 
       applyPasswordToDoc(mergedPdf);
       const mergedBytes = await mergedPdf.save();
-      downloadBlob(mergedBytes, 'BagiPDF_Merged_Document.pdf');
+      await downloadBlob(mergedBytes, 'BagiPDF_Merged_Document.pdf');
     } catch (err: any) {
       alert('Gagal menggabungkan PDF: ' + err.message);
     } finally {
@@ -742,7 +776,7 @@ export default function App() {
       applyPasswordToDoc(doc);
       const wmBytes = await doc.save();
       const baseName = file.name.replace(/\.[^/.]+$/, '');
-      downloadBlob(wmBytes, `${baseName}_watermarked.pdf`);
+      await downloadBlob(wmBytes, `${baseName}_watermarked.pdf`);
     } catch (err: any) {
       alert('Gagal menerapkan Watermark: ' + err.message);
     } finally {
@@ -812,7 +846,7 @@ export default function App() {
       applyPasswordToDoc(doc);
       const editedBytes = await doc.save();
       const baseName = file.name.replace(/\.[^/.]+$/, '');
-      downloadBlob(editedBytes, `${baseName}_edited.pdf`);
+      await downloadBlob(editedBytes, `${baseName}_edited.pdf`);
     } catch (err: any) {
       alert('Gagal menyimpan hasil edit PDF: ' + err.message);
     } finally {
@@ -878,7 +912,7 @@ export default function App() {
     }
   };
 
-  const handleExportExcelFile = () => {
+  const handleExportExcelFile = async () => {
     if (excelData.length === 0) {
       alert('Belum ada data tabel yang diekstrak!');
       return;
@@ -887,7 +921,12 @@ export default function App() {
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'BagiPDF Export');
     const baseName = file ? file.name.replace(/\.[^/.]+$/, '') : 'PDF_Data';
-    XLSX.writeFile(wb, `${baseName}_exported.xlsx`);
+    const excelBuffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+    await downloadBlob(
+      new Uint8Array(excelBuffer),
+      `${baseName}_exported.xlsx`,
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    );
   };
 
   return (
@@ -1558,7 +1597,7 @@ export default function App() {
             </div>
             <div>
               <h3 className="text-lg font-bold text-white">BagiPDF Suite</h3>
-              <p className="text-xs text-slate-400 mt-1">Versi 2.0.0 • Rust & Tauri Engine</p>
+              <p className="text-xs text-slate-400 mt-1">Versi 2.1.0 • Rust & Tauri Engine</p>
             </div>
             <div className="w-full bg-slate-900/60 border border-slate-700/50 rounded-xl p-4 text-xs text-slate-300 space-y-2.5 text-left">
               <div className="flex items-center gap-2.5"><User className="w-4 h-4 text-indigo-400" /><span>Pengembang: <strong>Franky Setiawan</strong></span></div>

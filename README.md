@@ -7,7 +7,7 @@ Aplikasi desktop modern GUI untuk memotong/memisahkan file PDF dengan fitur leng
 ## 👨‍💻 Informasi Pengembang & Versioning
 
 - **Nama Aplikasi**: BagiPDF
-- **Versi**: `v2.0.0` (Rust & Tauri Engine)
+- **Versi**: `v2.1.0` (Rust & Tauri Engine)
 - **Pengembang**: Franky Setiawan
 - **Website**: [https://www.frm.web.id](https://www.frm.web.id)
 
