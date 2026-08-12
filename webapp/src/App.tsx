@@ -3,6 +3,7 @@ import { PDFDocument, StandardFonts, rgb, degrees } from 'pdf-lib';
 import * as pdfjsLib from 'pdfjs-dist';
 import JSZip from 'jszip';
 import * as XLSX from 'xlsx';
+import { encryptPDF } from '@pdfsmaller/pdf-encrypt-lite';
 import { 
   UploadCloud, 
   Grid, 
@@ -972,36 +973,11 @@ export default function App() {
 
     try {
       const arrayBuffer = await file.arrayBuffer();
-      const doc = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
+      const pdfBytes = new Uint8Array(arrayBuffer);
 
-      // Apply PDF 1.7 Standard Security Encryption Dictionary to Trailer
-      const padding = new Uint8Array([
-        0x28, 0xbf, 0x4e, 0x5e, 0x4e, 0x75, 0x8a, 0x41, 0x64, 0x00, 0x4e, 0x56, 0xff, 0xfa, 0x01, 0x08,
-        0x2e, 0x2e, 0x00, 0xb6, 0xd0, 0x68, 0x3e, 0x80, 0x2f, 0x0c, 0xa9, 0xfe, 0x48, 0x53, 0x66, 0x74
-      ]);
-      const pwdBytes = new TextEncoder().encode(pdfPassword);
-      const passBuf = new Uint8Array(32);
-      passBuf.set(pwdBytes.subarray(0, 32));
-      if (pwdBytes.length < 32) {
-        passBuf.set(padding.subarray(0, 32 - pwdBytes.length), pwdBytes.length);
-      }
-      const uHash = md5Bytes(passBuf);
-      const oHash = md5Bytes(passBuf);
-
-      const context = doc.context;
-      const encryptDict = context.obj({
-        Filter: 'Standard',
-        V: 1,
-        R: 2,
-        O: oHash,
-        U: uHash,
-        P: -44,
-      });
-
-      const encryptRef = context.register(encryptDict);
-      doc.context.trailerInfo.Encrypt = encryptRef;
-
-      const lockedBytes = await doc.save();
+      // Use pdf-encrypt-lite to encrypt the PDF bytes directly
+      const lockedBytes = await encryptPDF(pdfBytes, pdfPassword);
+      
       const baseName = file.name.replace(/\.[^/.]+$/, '');
       await downloadBlob(lockedBytes, `${baseName}_protected.pdf`);
     } catch (err: any) {
@@ -1139,36 +1115,38 @@ export default function App() {
               <input ref={fileInputRef} type="file" accept="application/pdf" onChange={handleFileChange} className="hidden" />
 
               {/* Password Box */}
-              <div className="bg-slate-900/60 border border-slate-700/50 rounded-xl p-3.5 flex flex-col gap-2.5">
-                <div className="flex items-center justify-between text-xs font-semibold text-slate-300">
-                  <span className="flex items-center gap-1.5"><Lock className="w-3.5 h-3.5 text-indigo-400" /> Kata Sandi & Lock PDF</span>
-                </div>
-                <div className="relative flex items-center">
-                  <input 
-                    type={showPdfPassword ? "text" : "password"} 
-                    value={pdfPassword}
-                    onChange={(e) => setPdfPassword(e.target.value)}
-                    placeholder="Masukkan password PDF..."
-                    className="w-full bg-slate-950/80 border border-slate-700/80 rounded-lg pl-3 pr-8 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
-                  />
-                  <button type="button" onClick={() => setShowPdfPassword(!showPdfPassword)} className="absolute right-2 text-slate-400 hover:text-slate-200">
-                    {showPdfPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                  </button>
-                </div>
-                {pdfPassword.trim().length > 0 && (
-                  <label className="flex items-center gap-2 cursor-pointer pt-1 border-t border-slate-800">
+              {mainTool !== 'split' && (
+                <div className="bg-slate-900/60 border border-slate-700/50 rounded-xl p-3.5 flex flex-col gap-2.5">
+                  <div className="flex items-center justify-between text-xs font-semibold text-slate-300">
+                    <span className="flex items-center gap-1.5"><Lock className="w-3.5 h-3.5 text-indigo-400" /> Kata Sandi & Lock PDF</span>
+                  </div>
+                  <div className="relative flex items-center">
                     <input 
-                      type="checkbox" 
-                      checked={lockOutputWithPassword} 
-                      onChange={(e) => setLockOutputWithPassword(e.target.checked)} 
-                      className="rounded border-slate-700 text-indigo-600 bg-slate-900" 
+                      type={showPdfPassword ? "text" : "password"} 
+                      value={pdfPassword}
+                      onChange={(e) => setPdfPassword(e.target.value)}
+                      placeholder="Masukkan password PDF..."
+                      className="w-full bg-slate-950/80 border border-slate-700/80 rounded-lg pl-3 pr-8 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
                     />
-                    <span className="text-[11px] font-medium text-emerald-400 flex items-center gap-1">
-                      🔒 Kunci File Output dengan Password Ini
-                    </span>
-                  </label>
-                )}
-              </div>
+                    <button type="button" onClick={() => setShowPdfPassword(!showPdfPassword)} className="absolute right-2 text-slate-400 hover:text-slate-200">
+                      {showPdfPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
+                  {pdfPassword.trim().length > 0 && (
+                    <label className="flex items-center gap-2 cursor-pointer pt-1 border-t border-slate-800">
+                      <input 
+                        type="checkbox" 
+                        checked={lockOutputWithPassword} 
+                        onChange={(e) => setLockOutputWithPassword(e.target.checked)} 
+                        className="rounded border-slate-700 text-indigo-600 bg-slate-900" 
+                      />
+                      <span className="text-[11px] font-medium text-emerald-400 flex items-center gap-1">
+                        🔒 Kunci File Output dengan Password Ini
+                      </span>
+                    </label>
+                  )}
+                </div>
+              )}
 
               {/* Mode Tabs */}
               <div className="flex flex-col flex-1 gap-3.5">
@@ -1785,11 +1763,11 @@ export default function App() {
             </div>
             <div>
               <h3 className="text-lg font-bold text-white">BagiPDF Suite</h3>
-              <p className="text-xs text-slate-400 mt-1">Versi 2.1.0 • Rust & Tauri Engine</p>
+              <p className="text-xs text-slate-400 mt-1">Versi 2.1.1 • Rust & Tauri Engine</p>
             </div>
             <div className="w-full bg-slate-900/60 border border-slate-700/50 rounded-xl p-4 text-xs text-slate-300 space-y-2.5 text-left">
-              <div className="flex items-center gap-2.5"><User className="w-4 h-4 text-indigo-400" /><span>Pengembang: <strong>Franky Setiawan</strong></span></div>
-              <div className="flex items-center gap-2.5"><Globe className="w-4 h-4 text-indigo-400" /><span>Website: <a href="https://www.frm.web.id" target="_blank" rel="noreferrer" className="text-indigo-400 hover:underline font-medium">https://www.frm.web.id</a></span></div>
+              <div className="flex items-center gap-2.5"><User className="w-4 h-4 text-indigo-400" /><span>Pengembang: <strong>Muhammmad Fahrizal Rahman</strong></span></div>
+              <div className="flex items-center gap-2.5"><Globe className="w-4 h-4 text-indigo-400" /><span>Website: <button type="button" onClick={async () => { try { const { invoke } = await import('@tauri-apps/api/core'); await invoke('open_url', { url: 'https://www.frm.web.id' }); } catch { window.open('https://www.frm.web.id', '_blank'); } }} className="text-indigo-400 hover:underline font-medium focus:outline-none">https://www.frm.web.id</button></span></div>
             </div>
             <p className="text-[11px] text-slate-400">Aplikasi pengelolaan PDF lengkap (Split, Merge, Watermark, Edit, PDF to Excel) mandiri & offline.</p>
             <button onClick={() => setShowAbout(false)} className="w-full bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white py-2 rounded-lg text-xs">Tutup</button>

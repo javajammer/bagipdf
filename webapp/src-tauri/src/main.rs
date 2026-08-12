@@ -30,9 +30,14 @@ async fn save_file_dialog(default_name: String, contents: Vec<u8>) -> Result<Opt
     }
 }
 
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    open::that(&url).map_err(|e| format!("Gagal membuka browser: {}", e))
+}
+
 fn main() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![greet, save_file_dialog])
+        .invoke_handler(tauri::generate_handler![greet, save_file_dialog, open_url])
         .run(tauri::generate_context!())
         .expect("error while running BagiPDF Tauri application");
 }

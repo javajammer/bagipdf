@@ -1,8 +1,8 @@
 {
   "name": "bagipdf",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "type": "module",
-  "description": "BagiPDF - High Performance Portable Windows PDF Suite powered by Rust & Tauri by Franky Setiawan",
+  "description": "BagiPDF - High Performance Portable Windows PDF Suite powered by Rust & Tauri by Muhammad Fahrizal Rahman",
   "main": "electron.cjs",
   "scripts": {
     "dev": "vite",
@@ -31,7 +31,7 @@
       "target": [
         "portable"
       ],
-      "publisherName": "Franky Setiawan",
+      "publisherName": "Muhammad Fahrizal Rahman",
       "icon": "public/vite.svg"
     },
     "portable": {
@@ -39,6 +39,7 @@
     }
   },
   "dependencies": {
+    "@pdfsmaller/pdf-encrypt-lite": "^1.2.0",
     "@tauri-apps/api": "^2.11.1",
     "jszip": "^3.10.1",
     "lucide-react": "^1.16.0",
