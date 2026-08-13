@@ -1,3 +1,5 @@
+[![Build BagiPDF Executables & Packages (Windows & Linux)](https://github.com/javajammer/bagipdf/actions/workflows/build-windows.yml/badge.svg)](https://github.com/javajammer/bagipdf/actions/workflows/build-windows.yml)
+
 # BagiPDF
 
 Aplikasi desktop modern GUI untuk memotong/memisahkan file PDF dengan fitur lengkap, dikemas khusus dalam bentuk **satu file `.exe` portabel (standalone)** tanpa memerlukan proses instalasi. Ditujukan untuk sistem operasi **Microsoft Windows (Windows 11 & Windows 10) 64-bit (x86_64)**.
