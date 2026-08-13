@@ -1,0 +1,9 @@
+(function() {
+    var implementors = Object.fromEntries([["lopdf",[["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.93.1/core/default/trait.Default.html\" title=\"trait core::default::Default\">Default</a> for <a class=\"enum\" href=\"lopdf/enum.StringFormat.html\" title=\"enum lopdf::StringFormat\">StringFormat</a>"],["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.93.1/core/default/trait.Default.html\" title=\"trait core::default::Default\">Default</a> for <a class=\"struct\" href=\"lopdf/struct.Dictionary.html\" title=\"struct lopdf::Dictionary\">Dictionary</a>"],["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.93.1/core/default/trait.Default.html\" title=\"trait core::default::Default\">Default</a> for <a class=\"struct\" href=\"lopdf/struct.Document.html\" title=\"struct lopdf::Document\">Document</a>"],["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.93.1/core/default/trait.Default.html\" title=\"trait core::default::Default\">Default</a> for <a class=\"struct\" href=\"lopdf/struct.IncrementalDocument.html\" title=\"struct lopdf::IncrementalDocument\">IncrementalDocument</a>"],["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.93.1/core/default/trait.Default.html\" title=\"trait core::default::Default\">Default</a> for <a class=\"struct\" href=\"lopdf/struct.Toc.html\" title=\"struct lopdf::Toc\">Toc</a>"]]]]);
+    if (window.register_implementors) {
+        window.register_implementors(implementors);
+    } else {
+        window.pending_implementors = implementors;
+    }
+})()
+//{"start":57,"fragment_lengths":[1336]}

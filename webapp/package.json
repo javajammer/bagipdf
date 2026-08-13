@@ -1,6 +1,6 @@
 {
   "name": "bagipdf",
-  "version": "2.1.1",
+  "version": "2.2.0",
   "type": "module",
   "description": "BagiPDF - High Performance Portable Windows PDF Suite powered by Rust & Tauri by Muhammad Fahrizal Rahman",
   "main": "electron.cjs",

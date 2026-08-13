@@ -31,7 +31,16 @@ import {
   Image as ImageIcon,
   Check,
   Move,
-  ShieldCheck
+  ShieldCheck,
+  Folder,
+  FolderOpen,
+  Play,
+  StopCircle,
+  CheckCircle2,
+  AlertCircle,
+  Search,
+  FileText,
+  FileUp
 } from 'lucide-react';
 
 import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.min.js?url';
@@ -61,6 +70,17 @@ interface PDFAnnotation {
   yPercent: number;
   fontSize: number;
   color: string;
+}
+
+interface BatchPdfItem {
+  id: string;
+  file: File;
+  relativePath?: string;
+  status: 'pending' | 'processing' | 'success' | 'error';
+  pageCount?: number;
+  rowCount?: number;
+  errorMsg?: string;
+  extractedRows?: string[][];
 }
 
 type MainToolMode = 'split' | 'merge' | 'lock' | 'watermark' | 'edit' | 'excel';
@@ -127,10 +147,26 @@ export default function App() {
   // --- PDF TO EXCEL STATE ---
   const [excelData, setExcelData] = useState<string[][]>([]);
   const [isExtractingExcel, setIsExtractingExcel] = useState<boolean>(false);
+  const [excelBatchItems, setExcelBatchItems] = useState<BatchPdfItem[]>([]);
+  const [excelOutputMode, setExcelOutputMode] = useState<'consolidated' | 'zip'>('consolidated');
+  const [sanitizeFormulas, setSanitizeFormulas] = useState<boolean>(true);
+  const [batchProgress, setBatchProgress] = useState<{ current: number; total: number; currentFileName: string; successCount: number; errorCount: number }>({
+    current: 0,
+    total: 0,
+    currentFileName: '',
+    successCount: 0,
+    errorCount: 0
+  });
+  const [excelPreviewSearch, setExcelPreviewSearch] = useState<string>('');
+  const [excelPreviewPage, setExcelPreviewPage] = useState<number>(1);
+  const [activeExcelTab, setActiveExcelTab] = useState<'files' | 'preview'>('files');
 
+  const cancelBatchRef = useRef<boolean>(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mergeFileInputRef = useRef<HTMLInputElement>(null);
   const watermarkImgInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
+  const batchFilesInputRef = useRef<HTMLInputElement>(null);
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -883,62 +919,318 @@ export default function App() {
     }
   };
 
-  // --- PDF TO EXCEL LOGIC ---
-  const handleExtractPdfToExcel = async () => {
-    if (!file) {
-      alert('Harap pilih file PDF terlebih dahulu!');
+  // --- PDF TO EXCEL LOGIC & BATCH ENGINE ---
+  // Neutralize dangerous characters starting Excel cells (=, +, -, @, \t, \r) for OWASP / Whitelist security compliance
+  const sanitizeExcelCell = (val: string): string => {
+    if (!val) return '';
+    const trimmed = val.trim();
+    if (/^[\=\+\-\@\t\r]/.test(trimmed)) {
+      return "'" + trimmed;
+    }
+    return trimmed;
+  };
+
+  const handleFolderSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || e.target.files.length === 0) return;
+    
+    const allFiles = Array.from(e.target.files);
+    const pdfFiles = allFiles.filter(f => f.name.toLowerCase().endsWith('.pdf'));
+
+    if (pdfFiles.length === 0) {
+      showToastNotification('Tidak Ada File PDF', 'Tidak ditemukan file berformat .pdf di dalam folder tersebut.', 'error');
+      return;
+    }
+
+    let filesToUse = pdfFiles;
+    if (pdfFiles.length > 2000) {
+      showToastNotification(
+        'Batas Maksimal 2000 File',
+        `Terdeteksi ${pdfFiles.length} file PDF. 2000 file pertama dipilih untuk kestabilan & performa aplikasi.`,
+        'info'
+      );
+      filesToUse = pdfFiles.slice(0, 2000);
+    } else {
+      showToastNotification(
+        'Folder Berhasil Dimuat',
+        `Ditemukan ${pdfFiles.length} file PDF di dalam folder.`,
+        'success'
+      );
+    }
+
+    const items: BatchPdfItem[] = filesToUse.map(f => ({
+      id: Math.random().toString(36).substring(2, 9),
+      file: f,
+      relativePath: f.webkitRelativePath || f.name,
+      status: 'pending'
+    }));
+
+    setExcelBatchItems(items);
+    setExcelData([]);
+    setExcelPreviewPage(1);
+    setBatchProgress({ current: 0, total: items.length, currentFileName: '', successCount: 0, errorCount: 0 });
+    e.target.value = '';
+  };
+
+  const handleBatchFilesSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || e.target.files.length === 0) return;
+    
+    const pdfFiles = Array.from(e.target.files).filter(f => f.name.toLowerCase().endsWith('.pdf'));
+
+    if (pdfFiles.length === 0) {
+      showToastNotification('Pilih File PDF', 'Harap pilih file berformat .pdf!', 'error');
+      return;
+    }
+
+    let filesToUse = pdfFiles;
+    if (pdfFiles.length > 2000) {
+      showToastNotification(
+        'Batas Maksimal 2000 File',
+        `Terdeteksi ${pdfFiles.length} file PDF. 2000 file pertama dipilih.`,
+        'info'
+      );
+      filesToUse = pdfFiles.slice(0, 2000);
+    }
+
+    const items: BatchPdfItem[] = filesToUse.map(f => ({
+      id: Math.random().toString(36).substring(2, 9),
+      file: f,
+      relativePath: f.name,
+      status: 'pending'
+    }));
+
+    setExcelBatchItems(prev => {
+      const combined = [...prev, ...items];
+      if (combined.length > 2000) {
+        showToastNotification('Batas Maksimal 2000 File', 'Jumlah file dibatasi 2000 file PDF.', 'info');
+        return combined.slice(0, 2000);
+      }
+      return combined;
+    });
+    e.target.value = '';
+  };
+
+  const handleExecuteBatchPdfToExcel = async () => {
+    if (excelBatchItems.length === 0) {
+      alert('Harap pilih folder atau file PDF terlebih dahulu!');
       return;
     }
 
     setIsExtractingExcel(true);
     setLoading(true);
-    setStatusMsg('Mengekstrak data teks & tabel dari PDF...');
+    cancelBatchRef.current = false;
 
-    try {
-      const arrayBuffer = await file.arrayBuffer();
-      const pdfJsDoc = await pdfjsLib.getDocument({ data: arrayBuffer, password: pdfPassword }).promise;
-      const count = pdfJsDoc.numPages;
+    let successCount = 0;
+    let errorCount = 0;
+    const total = excelBatchItems.length;
 
-      const extractedRows: string[][] = [];
-      extractedRows.push(['Halaman', 'Kolom 1 / Konten Teks', 'Position Y', 'Position X']);
+    const consolidatedRows: string[][] = [];
+    consolidatedRows.push(['Nama File PDF', 'Halaman', 'Kolom 1 / Konten Teks', 'Position Y', 'Position X']);
 
-      for (let i = 1; i <= count; i++) {
-        const page = await pdfJsDoc.getPage(i);
-        const textContent = await page.getTextContent();
-        
-        // Group items by vertical position Y
-        const items = textContent.items as any[];
-        const lineMap: { [y: number]: any[] } = {};
+    const updatedBatchItems = [...excelBatchItems];
 
-        for (const item of items) {
-          if (!item.str || !item.str.trim()) continue;
-          const y = Math.round(item.transform[5] / 10) * 10; // 10px row tolerance grouping
-          if (!lineMap[y]) lineMap[y] = [];
-          lineMap[y].push(item);
-        }
-
-        // Sort rows top-to-bottom (highest Y to lowest Y)
-        const sortedYs = Object.keys(lineMap).map(Number).sort((a, b) => b - a);
-
-        for (const y of sortedYs) {
-          const rowItems = lineMap[y];
-          // Sort items left-to-right (lowest X to highest X)
-          rowItems.sort((a, b) => a.transform[4] - b.transform[4]);
-          
-          const rowValues = rowItems.map(it => it.str.trim());
-          extractedRows.push([`Halaman ${i}`, ...rowValues]);
-        }
+    for (let idx = 0; idx < total; idx++) {
+      if (cancelBatchRef.current) {
+        showToastNotification('Proses Dihentikan', 'Konversi batch PDF ke Excel dihentikan oleh pengguna.', 'info');
+        break;
       }
 
-      setExcelData(extractedRows);
-      setStatusMsg('');
-    } catch (err: any) {
-      alert('Gagal mengekstrak PDF ke Excel: ' + err.message);
-    } finally {
-      setIsExtractingExcel(false);
-      setLoading(false);
+      const item = updatedBatchItems[idx];
+      item.status = 'processing';
+      setExcelBatchItems([...updatedBatchItems]);
+      setBatchProgress({
+        current: idx + 1,
+        total,
+        currentFileName: item.file.name,
+        successCount,
+        errorCount
+      });
+
+      try {
+        const arrayBuffer = await item.file.arrayBuffer();
+        const pdfJsDoc = await pdfjsLib.getDocument({ data: arrayBuffer, password: pdfPassword }).promise;
+        const pageCount = pdfJsDoc.numPages;
+
+        const fileRows: string[][] = [];
+
+        for (let p = 1; p <= pageCount; p++) {
+          const page = await pdfJsDoc.getPage(p);
+          const textContent = await page.getTextContent();
+          const items = textContent.items as any[];
+          const lineMap: { [y: number]: any[] } = {};
+
+          for (const it of items) {
+            if (!it.str || !it.str.trim()) continue;
+            const y = Math.round(it.transform[5] / 10) * 10;
+            if (!lineMap[y]) lineMap[y] = [];
+            lineMap[y].push(it);
+          }
+
+          const sortedYs = Object.keys(lineMap).map(Number).sort((a, b) => b - a);
+
+          for (const y of sortedYs) {
+            const rowItems = lineMap[y];
+            rowItems.sort((a, b) => a.transform[4] - b.transform[4]);
+            const rowValues = rowItems.map(it => {
+              const str = it.str.trim();
+              return sanitizeFormulas ? sanitizeExcelCell(str) : str;
+            });
+
+            const rowData = [item.file.name, `Halaman ${p}`, ...rowValues];
+            fileRows.push(rowData);
+            consolidatedRows.push(rowData);
+          }
+        }
+
+        try {
+          pdfJsDoc.destroy();
+        } catch (e) {}
+
+        item.status = 'success';
+        item.pageCount = pageCount;
+        item.rowCount = fileRows.length;
+        item.extractedRows = fileRows;
+        successCount++;
+
+      } catch (err: any) {
+        console.warn(`Gagal memproses file ${item.file.name}:`, err);
+        item.status = 'error';
+        item.errorMsg = err?.message || 'Gagal membaca PDF';
+        errorCount++;
+      }
+
+      setExcelBatchItems([...updatedBatchItems]);
+      setBatchProgress({
+        current: idx + 1,
+        total,
+        currentFileName: item.file.name,
+        successCount,
+        errorCount
+      });
+
+      // Yield event loop every 5 files to maintain lightweight, 60 FPS UI performance
+      if (idx % 5 === 0 || idx === total - 1) {
+        await new Promise(resolve => setTimeout(resolve, 0));
+      }
+    }
+
+    setExcelData(consolidatedRows);
+    setIsExtractingExcel(false);
+    setLoading(false);
+
+    if (!cancelBatchRef.current) {
+      showToastNotification(
+        'Konversi Batch Selesai!',
+        `Berhasil memproses ${successCount} dari ${total} file PDF ke Excel.`,
+        'success'
+      );
     }
   };
+
+  const handleExportBatchExcel = async () => {
+    if (excelBatchItems.length === 0) {
+      alert('Tidak ada file batch untuk diunduh!');
+      return;
+    }
+
+    const processedItems = excelBatchItems.filter(i => i.status === 'success');
+    if (processedItems.length === 0) {
+      alert('Belum ada file PDF yang berhasil dikonversi ke Excel!');
+      return;
+    }
+
+    setLoading(true);
+    setStatusMsg('Menyiapkan file Excel...');
+
+    try {
+      if (excelOutputMode === 'consolidated') {
+        if (excelData.length <= 1) {
+          alert('Belum ada data tabel yang diekstrak!');
+          setLoading(false);
+          return;
+        }
+
+        const ws = XLSX.utils.aoa_to_sheet(excelData);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Konsolidasi PDF');
+        const excelBuffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+        
+        await downloadBlob(
+          new Uint8Array(excelBuffer),
+          `BagiPDF_Batch_${processedItems.length}_Files_Konsolidasi.xlsx`,
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        );
+      } else {
+        const zip = new JSZip();
+
+        for (const item of processedItems) {
+          if (!item.extractedRows || item.extractedRows.length === 0) continue;
+          
+          const fileData: string[][] = [
+            ['Halaman', 'Kolom 1 / Konten Teks', 'Position Y', 'Position X'],
+            ...item.extractedRows.map(row => row.slice(1))
+          ];
+
+          const ws = XLSX.utils.aoa_to_sheet(fileData);
+          const wb = XLSX.utils.book_new();
+          XLSX.utils.book_append_sheet(wb, ws, 'Tabel PDF');
+          const excelBuffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+
+          const baseName = item.file.name.replace(/\.[^/.]+$/, '');
+          zip.file(`${baseName}_excel.xlsx`, new Uint8Array(excelBuffer));
+        }
+
+        const zipBlob = await zip.generateAsync({ type: 'blob', mimeType: 'application/zip' });
+        await downloadBlob(
+          zipBlob,
+          `BagiPDF_Batch_${processedItems.length}_Files_Excel.zip`,
+          'application/zip'
+        );
+      }
+    } catch (err: any) {
+      alert('Gagal mengekspor file Excel: ' + err.message);
+    } finally {
+      setLoading(false);
+      setStatusMsg('');
+    }
+  };
+
+  const handleCancelBatch = () => {
+    cancelBatchRef.current = true;
+  };
+
+  const handleClearBatch = () => {
+    if (isExtractingExcel) return;
+    setExcelBatchItems([]);
+    setExcelData([]);
+    setBatchProgress({ current: 0, total: 0, currentFileName: '', successCount: 0, errorCount: 0 });
+  };
+
+  // Memoized Preview Filtering & Pagination for light DOM rendering up to 2000 files
+  const filteredPreviewRows = React.useMemo(() => {
+    if (!excelData || excelData.length === 0) return [];
+    const header = excelData[0];
+    const dataRows = excelData.slice(1);
+    
+    if (!excelPreviewSearch.trim()) return excelData;
+
+    const term = excelPreviewSearch.toLowerCase();
+    const matched = dataRows.filter(row => 
+      row.some(cell => String(cell).toLowerCase().includes(term))
+    );
+    return [header, ...matched];
+  }, [excelData, excelPreviewSearch]);
+
+  const ROWS_PER_PAGE = 50;
+  const totalPreviewPages = Math.max(1, Math.ceil((filteredPreviewRows.length > 1 ? filteredPreviewRows.length - 1 : 0) / ROWS_PER_PAGE));
+
+  const paginatedPreviewRows = React.useMemo(() => {
+    if (filteredPreviewRows.length <= 1) return filteredPreviewRows;
+    const header = filteredPreviewRows[0];
+    const dataRows = filteredPreviewRows.slice(1);
+    const startIdx = (excelPreviewPage - 1) * ROWS_PER_PAGE;
+    const pageData = dataRows.slice(startIdx, startIdx + ROWS_PER_PAGE);
+    return [header, ...pageData];
+  }, [filteredPreviewRows, excelPreviewPage]);
 
   const handleExportExcelFile = async () => {
     if (excelData.length === 0) {
@@ -1651,75 +1943,395 @@ export default function App() {
           </div>
         )}
 
-        {/* --- 5. PDF TO EXCEL SUITE --- */}
+        {/* --- 5. PDF TO EXCEL SUITE (UP TO 2000 PDFS / FOLDER SUPPORT) --- */}
         {mainTool === 'excel' && (
-          <div className="flex-1 flex gap-5">
-            <aside className="w-[340px] bg-[#2B2B36]/90 border border-slate-700/40 rounded-xl p-4 flex flex-col gap-4 shadow-xl backdrop-blur-xl flex-shrink-0">
-              <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-2">
-                <FileSpreadsheet className="w-4 h-4 text-indigo-400" /> PDF ke Spreadsheet Excel
-              </h3>
-
-              <div 
-                onClick={() => fileInputRef.current?.click()}
-                className="border border-dashed border-slate-600 rounded-xl p-4 text-center cursor-pointer bg-slate-800/40 hover:bg-slate-800/70"
-              >
-                <p className="text-xs text-indigo-300 font-medium truncate">{file ? file.name : 'Pilih File PDF Berisi Tabel'}</p>
-                <p className="text-[11px] text-slate-400 mt-1">Ekstrak struktur tabel ke file Excel (.xlsx)</p>
-              </div>
-              <input ref={fileInputRef} type="file" accept="application/pdf" onChange={handleFileChange} className="hidden" />
-
-              <button 
-                disabled={!file || loading}
-                onClick={handleExtractPdfToExcel}
-                className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white font-semibold py-2.5 rounded-lg shadow-md transition flex items-center justify-center gap-2 text-xs"
-              >
-                {isExtractingExcel ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-                <span>Ekstrak Data Tabel ke Grid</span>
-              </button>
-
-              {excelData.length > 0 && (
-                <button 
-                  onClick={handleExportExcelFile}
-                  className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2.5 rounded-lg shadow-md transition flex items-center justify-center gap-2 text-xs mt-2"
-                >
-                  <Download className="w-4 h-4" />
-                  <span>Unduh File Excel (.xlsx)</span>
-                </button>
-              )}
-            </aside>
-
-            {/* Table Preview Grid */}
-            <section className="flex-1 bg-[#2B2B36]/90 border border-slate-700/40 rounded-xl p-5 flex flex-col gap-3 overflow-hidden shadow-xl backdrop-blur-xl">
-              <div className="flex items-center justify-between">
-                <h4 className="text-xs font-semibold text-slate-300">Hasil Ekstraksi Grid Excel ({excelData.length} Baris):</h4>
-                {excelData.length > 0 && (
-                  <span className="text-[11px] text-emerald-400 bg-emerald-500/10 px-2.5 py-0.5 rounded border border-emerald-500/30 font-medium">
-                    Siap Diunduh (.xlsx)
+          <div className="flex-1 flex gap-5 overflow-hidden">
+            {/* Left Sidebar Control Panel */}
+            <aside className="w-[360px] bg-[#2B2B36]/90 border border-slate-700/40 rounded-xl p-4 flex flex-col gap-4 shadow-xl backdrop-blur-xl flex-shrink-0 overflow-y-auto">
+              <div className="flex items-center justify-between border-b border-slate-700/50 pb-3">
+                <div className="flex items-center gap-2">
+                  <FileSpreadsheet className="w-5 h-5 text-indigo-400" />
+                  <div>
+                    <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wider">PDF ke Excel Batch</h3>
+                    <p className="text-[11px] text-slate-400">Konversi s/d 2.000 File PDF / Folder</p>
+                  </div>
+                </div>
+                {excelBatchItems.length > 0 && (
+                  <span className="text-[11px] font-bold text-indigo-300 bg-indigo-500/20 border border-indigo-500/30 px-2 py-0.5 rounded-full">
+                    {excelBatchItems.length} File
                   </span>
                 )}
               </div>
 
-              {excelData.length === 0 ? (
-                <div className="flex-1 flex flex-col items-center justify-center text-slate-500">
-                  <FileSpreadsheet className="w-12 h-12 text-slate-600 mb-2" />
-                  <p className="text-xs font-medium text-slate-300">Belum Ada Data Diekstrak</p>
-                  <p className="text-[11px] text-slate-500 mt-1">Pilih PDF lalu klik "Ekstrak Data Tabel ke Grid".</p>
+              {/* Selection Options: Read Folder or Select Files */}
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  disabled={isExtractingExcel}
+                  onClick={() => folderInputRef.current?.click()}
+                  className="flex flex-col items-center justify-center p-3 rounded-xl border border-indigo-500/40 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-200 transition group disabled:opacity-50"
+                >
+                  <FolderOpen className="w-6 h-6 text-indigo-400 group-hover:scale-110 transition mb-1" />
+                  <span className="text-xs font-semibold">📁 Pilih Folder</span>
+                  <span className="text-[10px] text-slate-400">Baca seluruh PDF</span>
+                </button>
+
+                <button
+                  type="button"
+                  disabled={isExtractingExcel}
+                  onClick={() => batchFilesInputRef.current?.click()}
+                  className="flex flex-col items-center justify-center p-3 rounded-xl border border-slate-600 bg-slate-800/40 hover:bg-slate-800/80 text-slate-200 transition group disabled:opacity-50"
+                >
+                  <FileUp className="w-6 h-6 text-slate-400 group-hover:scale-110 transition mb-1" />
+                  <span className="text-xs font-semibold">📄 Pilih File PDF</span>
+                  <span className="text-[10px] text-slate-400">Pilih multiple file</span>
+                </button>
+              </div>
+
+              {/* Hidden Inputs */}
+              <input
+                ref={folderInputRef}
+                type="file"
+                accept="application/pdf"
+                // @ts-ignore
+                webkitdirectory=""
+                directory=""
+                multiple
+                onChange={handleFolderSelect}
+                className="hidden"
+              />
+              <input
+                ref={batchFilesInputRef}
+                type="file"
+                accept="application/pdf"
+                multiple
+                onChange={handleBatchFilesSelect}
+                className="hidden"
+              />
+
+              {/* Output & Security Options */}
+              <div className="bg-slate-900/60 border border-slate-700/50 rounded-xl p-3.5 space-y-3">
+                <label className="text-xs font-semibold text-slate-300 block border-b border-slate-800 pb-1.5">
+                  Format Output & Keamanan
+                </label>
+
+                {/* Output Mode Option */}
+                <div className="space-y-1.5">
+                  <label className="text-[11px] text-slate-400 font-medium block">Mode File Hasil:</label>
+                  <div className="flex flex-col gap-1.5">
+                    <label className="flex items-center gap-2 cursor-pointer text-xs text-slate-200 bg-slate-950/60 p-2 rounded-lg border border-slate-800 hover:border-indigo-500/40 transition">
+                      <input
+                        type="radio"
+                        name="excelMode"
+                        checked={excelOutputMode === 'consolidated'}
+                        onChange={() => setExcelOutputMode('consolidated')}
+                        className="text-indigo-600 focus:ring-0"
+                      />
+                      <div>
+                        <span className="font-medium text-indigo-300">1 File Excel Master (.xlsx)</span>
+                        <p className="text-[10px] text-slate-400">Semua PDF digabung dalam 1 sheet konsolidasi</p>
+                      </div>
+                    </label>
+
+                    <label className="flex items-center gap-2 cursor-pointer text-xs text-slate-200 bg-slate-950/60 p-2 rounded-lg border border-slate-800 hover:border-indigo-500/40 transition">
+                      <input
+                        type="radio"
+                        name="excelMode"
+                        checked={excelOutputMode === 'zip'}
+                        onChange={() => setExcelOutputMode('zip')}
+                        className="text-indigo-600 focus:ring-0"
+                      />
+                      <div>
+                        <span className="font-medium text-indigo-300">Arsip ZIP Excel (.zip)</span>
+                        <p className="text-[10px] text-slate-400">Tiap PDF dibuatkan file .xlsx terpisah dalam ZIP</p>
+                      </div>
+                    </label>
+                  </div>
                 </div>
-              ) : (
-                <div className="flex-1 overflow-auto border border-slate-700/60 rounded-xl bg-slate-950">
-                  <table className="w-full text-left text-xs text-slate-300 border-collapse">
-                    <tbody>
-                      {excelData.map((row, rIdx) => (
-                        <tr key={rIdx} className={rIdx === 0 ? "bg-slate-900 font-semibold text-indigo-300 border-b border-slate-800" : "border-b border-slate-900 hover:bg-slate-900/50"}>
-                          {row.map((cell, cIdx) => (
-                            <td key={cIdx} className="p-2 border-r border-slate-900 min-w-[120px] truncate">
-                              {cell}
-                            </td>
-                          ))}
-                        </tr>
+
+                {/* Security Whitelist Protection */}
+                <div className="pt-2 border-t border-slate-800">
+                  <label className="flex items-start gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={sanitizeFormulas}
+                      onChange={(e) => setSanitizeFormulas(e.target.checked)}
+                      className="rounded border-slate-700 text-indigo-600 bg-slate-950 mt-0.5"
+                    />
+                    <div>
+                      <span className="text-[11px] font-semibold text-emerald-400 flex items-center gap-1">
+                        <ShieldCheck className="w-3.5 h-3.5" /> Proteksi Formula Injection (Safe Guard)
+                      </span>
+                      <p className="text-[10px] text-slate-400 leading-tight mt-0.5">
+                        Menetralkan karakter =, +, -, @ untuk keamanan whitelist & mencegah eksekusi makro otomatis di Excel.
+                      </p>
+                    </div>
+                  </label>
+                </div>
+              </div>
+
+              {/* Password Input for Protected PDFs */}
+              <div className="bg-slate-900/40 border border-slate-700/40 rounded-xl p-3 flex flex-col gap-1.5">
+                <label className="text-[11px] font-medium text-slate-300 flex items-center gap-1.5">
+                  <Lock className="w-3.5 h-3.5 text-amber-400" /> Kata Sandi PDF (Opsional)
+                </label>
+                <input
+                  type="password"
+                  value={pdfPassword}
+                  onChange={(e) => setPdfPassword(e.target.value)}
+                  placeholder="Jika file PDF terenkripsi..."
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-white placeholder-slate-500"
+                />
+              </div>
+
+              {/* Execution Action Buttons */}
+              <div className="mt-auto space-y-2">
+                {isExtractingExcel ? (
+                  <button
+                    type="button"
+                    onClick={handleCancelBatch}
+                    className="w-full bg-red-600 hover:bg-red-500 text-white font-semibold py-2.5 rounded-lg shadow-md transition flex items-center justify-center gap-2 text-xs animate-pulse"
+                  >
+                    <StopCircle className="w-4 h-4" />
+                    <span>Hentikan Proses Batch</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={excelBatchItems.length === 0}
+                    onClick={handleExecuteBatchPdfToExcel}
+                    className="w-full bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 disabled:opacity-40 text-white font-semibold py-2.5 rounded-lg shadow-md transition flex items-center justify-center gap-2 text-xs"
+                  >
+                    <Play className="w-4 h-4" />
+                    <span>Mulai Konversi {excelBatchItems.length > 0 ? `(${excelBatchItems.length} PDF)` : ''}</span>
+                  </button>
+                )}
+
+                {excelBatchItems.length > 0 && (
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      disabled={isExtractingExcel || excelBatchItems.filter(i => i.status === 'success').length === 0}
+                      onClick={handleExportBatchExcel}
+                      className="flex-1 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-30 text-white font-semibold py-2 rounded-lg shadow-sm transition flex items-center justify-center gap-1.5 text-xs"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Unduh Hasil Excel</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={isExtractingExcel}
+                      onClick={handleClearBatch}
+                      className="bg-slate-800 hover:bg-slate-700 disabled:opacity-30 text-slate-300 p-2 rounded-lg border border-slate-700"
+                      title="Reset Daftar Batch"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
+              </div>
+            </aside>
+
+            {/* Right Pane: Realtime Batch Status & Data Preview */}
+            <section className="flex-1 bg-[#2B2B36]/90 border border-slate-700/40 rounded-xl p-5 flex flex-col gap-4 overflow-hidden shadow-xl backdrop-blur-xl">
+              {/* Top Bar with Tabs and Realtime Progress */}
+              <div className="flex items-center justify-between border-b border-slate-700/50 pb-3 flex-shrink-0">
+                <div className="flex items-center gap-2 bg-slate-900/80 p-1 rounded-lg border border-slate-700/60">
+                  <button
+                    type="button"
+                    onClick={() => setActiveExcelTab('files')}
+                    className={`px-3 py-1 text-xs font-semibold rounded-md transition flex items-center gap-1.5 ${
+                      activeExcelTab === 'files' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    <Layers className="w-3.5 h-3.5" />
+                    <span>Daftar File Batch ({excelBatchItems.length})</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setActiveExcelTab('preview')}
+                    className={`px-3 py-1 text-xs font-semibold rounded-md transition flex items-center gap-1.5 ${
+                      activeExcelTab === 'preview' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    <Grid className="w-3.5 h-3.5" />
+                    <span>Pratinjau Grid Excel ({excelData.length > 0 ? excelData.length - 1 : 0} Baris)</span>
+                  </button>
+                </div>
+
+                {/* Processing Status Banner */}
+                {batchProgress.total > 0 && (
+                  <div className="flex items-center gap-3 text-xs">
+                    <span className="text-slate-300">
+                      <strong>{batchProgress.current}</strong> / {batchProgress.total} File
+                    </span>
+                    <span className="text-emerald-400 font-medium">
+                      ✓ {batchProgress.successCount} Sukses
+                    </span>
+                    {batchProgress.errorCount > 0 && (
+                      <span className="text-red-400 font-medium">
+                        ✗ {batchProgress.errorCount} Gagal
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Realtime Progress Bar */}
+              {isExtractingExcel && (
+                <div className="bg-slate-900/80 border border-slate-700/60 rounded-xl p-3 flex flex-col gap-2 flex-shrink-0">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-indigo-300 font-medium truncate max-w-[400px]">
+                      ⏳ Memproses: {batchProgress.currentFileName}
+                    </span>
+                    <span className="font-bold text-indigo-400">
+                      {Math.round((batchProgress.current / batchProgress.total) * 100)}%
+                    </span>
+                  </div>
+                  <div className="w-full h-2 bg-slate-950 rounded-full overflow-hidden border border-slate-800">
+                    <div
+                      className="h-full bg-gradient-to-r from-indigo-500 via-blue-500 to-emerald-400 transition-all duration-200"
+                      style={{ width: `${(batchProgress.current / batchProgress.total) * 100}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Tab 1: Batch Files List */}
+              {activeExcelTab === 'files' && (
+                <div className="flex-1 flex flex-col overflow-hidden">
+                  {excelBatchItems.length === 0 ? (
+                    <div className="flex-1 flex flex-col items-center justify-center text-slate-500 border border-dashed border-slate-700/60 rounded-xl bg-slate-900/20 p-8">
+                      <FolderOpen className="w-14 h-14 text-slate-600 mb-3" />
+                      <h4 className="text-sm font-semibold text-slate-300">Belum Ada Folder Atau File PDF Diberikan</h4>
+                      <p className="text-xs text-slate-400 mt-1 max-w-sm text-center">
+                        Klik tombol <strong>"📁 Pilih Folder"</strong> untuk membaca seluruh file PDF di dalam folder, atau pilih beberapa file PDF sekaligus hingga 2.000 file.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="flex-1 overflow-y-auto space-y-2 pr-1">
+                      {excelBatchItems.map((item, idx) => (
+                        <div
+                          key={item.id}
+                          className="bg-slate-900/70 border border-slate-700/50 rounded-xl p-3 flex items-center justify-between gap-3 hover:border-slate-600 transition"
+                        >
+                          <div className="flex items-center gap-3 min-w-0">
+                            <span className="w-6 h-6 rounded-full bg-slate-800 text-slate-300 text-[11px] font-bold flex items-center justify-center flex-shrink-0 border border-slate-700">
+                              {idx + 1}
+                            </span>
+                            <div className="min-w-0">
+                              <p className="text-xs font-semibold text-slate-200 truncate">{item.file.name}</p>
+                              <p className="text-[10px] text-slate-400 truncate">
+                                {item.relativePath !== item.file.name ? item.relativePath : `${(item.file.size / (1024 * 1024)).toFixed(2)} MB`}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-3 flex-shrink-0">
+                            {item.status === 'pending' && (
+                              <span className="text-[10px] text-slate-400 bg-slate-800 px-2 py-0.5 rounded border border-slate-700">
+                                Menunggu
+                              </span>
+                            )}
+                            {item.status === 'processing' && (
+                              <span className="text-[10px] text-indigo-300 bg-indigo-500/20 border border-indigo-500/40 px-2 py-0.5 rounded flex items-center gap-1 animate-pulse">
+                                <RefreshCw className="w-3 h-3 animate-spin" /> Memproses...
+                              </span>
+                            )}
+                            {item.status === 'success' && (
+                              <span className="text-[10px] text-emerald-400 bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 rounded flex items-center gap-1">
+                                <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                                {item.pageCount} Hal • {item.rowCount} Baris
+                              </span>
+                            )}
+                            {item.status === 'error' && (
+                              <span className="text-[10px] text-red-400 bg-red-500/10 border border-red-500/30 px-2 py-0.5 rounded flex items-center gap-1" title={item.errorMsg}>
+                                <AlertCircle className="w-3 h-3 text-red-400" /> Gagal
+                              </span>
+                            )}
+                          </div>
+                        </div>
                       ))}
-                    </tbody>
-                  </table>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Tab 2: Excel Grid Data Preview */}
+              {activeExcelTab === 'preview' && (
+                <div className="flex-1 flex flex-col gap-3 overflow-hidden">
+                  {/* Search and Pagination Control Bar */}
+                  <div className="flex items-center justify-between gap-3 bg-slate-900/60 p-2.5 rounded-xl border border-slate-700/50 flex-shrink-0 text-xs">
+                    <div className="relative flex-1 max-w-sm">
+                      <Search className="w-3.5 h-3.5 absolute left-3 top-2 text-slate-400" />
+                      <input
+                        type="text"
+                        value={excelPreviewSearch}
+                        onChange={(e) => {
+                          setExcelPreviewSearch(e.target.value);
+                          setExcelPreviewPage(1);
+                        }}
+                        placeholder="Cari teks/data di grid..."
+                        className="w-full bg-slate-950 border border-slate-700 rounded-lg pl-8 pr-3 py-1 text-xs text-white placeholder-slate-500"
+                      />
+                    </div>
+
+                    <div className="flex items-center gap-2 text-slate-300">
+                      <button
+                        type="button"
+                        disabled={excelPreviewPage <= 1}
+                        onClick={() => setExcelPreviewPage(prev => Math.max(1, prev - 1))}
+                        className="px-2 py-1 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 rounded border border-slate-700"
+                      >
+                        Prev
+                      </button>
+                      <span>
+                        Halaman <strong>{excelPreviewPage}</strong> / {totalPreviewPages}
+                      </span>
+                      <button
+                        type="button"
+                        disabled={excelPreviewPage >= totalPreviewPages}
+                        onClick={() => setExcelPreviewPage(prev => Math.min(totalPreviewPages, prev + 1))}
+                        className="px-2 py-1 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 rounded border border-slate-700"
+                      >
+                        Next
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Grid Table Display */}
+                  {paginatedPreviewRows.length === 0 ? (
+                    <div className="flex-1 flex flex-col items-center justify-center text-slate-500">
+                      <FileSpreadsheet className="w-12 h-12 text-slate-600 mb-2" />
+                      <p className="text-xs font-medium text-slate-300">Belum Ada Data Diekstrak</p>
+                      <p className="text-[11px] text-slate-500 mt-1">Jalankan proses konversi untuk melihat data grid.</p>
+                    </div>
+                  ) : (
+                    <div className="flex-1 overflow-auto border border-slate-700/60 rounded-xl bg-slate-950">
+                      <table className="w-full text-left text-xs text-slate-300 border-collapse">
+                        <tbody>
+                          {paginatedPreviewRows.map((row, rIdx) => (
+                            <tr
+                              key={rIdx}
+                              className={
+                                rIdx === 0
+                                  ? 'bg-slate-900 font-semibold text-indigo-300 border-b border-slate-800 sticky top-0 z-10'
+                                  : 'border-b border-slate-900/80 hover:bg-slate-900/50'
+                              }
+                            >
+                              {row.map((cell, cIdx) => (
+                                <td key={cIdx} className="p-2 border-r border-slate-900 min-w-[120px] max-w-[300px] truncate">
+                                  {cell}
+                                </td>
+                              ))}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
                 </div>
               )}
             </section>
@@ -1763,7 +2375,7 @@ export default function App() {
             </div>
             <div>
               <h3 className="text-lg font-bold text-white">BagiPDF Suite</h3>
-              <p className="text-xs text-slate-400 mt-1">Versi 2.1.1 • Rust & Tauri Engine</p>
+              <p className="text-xs text-slate-400 mt-1">Versi 2.2.0 • Rust & Tauri Engine</p>
             </div>
             <div className="w-full bg-slate-900/60 border border-slate-700/50 rounded-xl p-4 text-xs text-slate-300 space-y-2.5 text-left">
               <div className="flex items-center gap-2.5"><User className="w-4 h-4 text-indigo-400" /><span>Pengembang: <strong>Muhammmad Fahrizal Rahman</strong></span></div>
