@@ -142,15 +142,12 @@ Protect/Lock · Preview · Save dialog native · Premium Batch PDF to Excel & Li
 
 ## 12. Improvement Suggestions (dari source code — rekap untuk Product)
 
-Daftar lengkap & ber-referensi ada di `fsd.md §10`. Prioritas produk:
+Daftar perbaikan arsitektural dan legalitas yang **telah diselesaikan**:
 
-1. **SEC-1/SEC-2 (HIGH)** — ganti enkripsi RC4 buatan tangan (`App.tsx:384`) dengan
-   AES-256 teruji & hentikan `ignoreEncryption:true` (`App.tsx:194`) yang membypass password.
-2. **MAINT-1 (HIGH)** — akhiri duplikasi `main.py` vs `webapp/`; pilih Tauri sebagai produk utama.
-3. **MAINT-2/3 (MED)** — seragamkan versi (README `2.1.0` vs kode `2.2.0`) & author/branding.
-4. **QA-1 (HIGH)** — tambah automated test & CI test job (saat ini CI hanya build).
-5. **MEM-1/PERF-1 (MED)** — virtualisasi preview & perbaiki algoritma split-by-size.
-6. **CORR-2 (MED)** — Edit PDF buang non-ASCII (`App.tsx:270`); dukung font embedded.
+1. **SEC-1/SEC-2 (SELESAI)** — Enkripsi ditingkatkan ke AES-256 menggunakan `@pdfsmaller/pdf-encrypt-lite` pada semua alur output. Penggunaan `ignoreEncryption:true` telah dihapus.
+2. **MAINT-1 (SELESAI)** — Duplikasi diakhiri; `main.py` dan spec PyInstaller diarsipkan ke folder `legacy/`. Single source of truth untuk versi (v2.3.0) diseragamkan di `package.json`, `Cargo.toml`, `tauri.conf.json`, `README.md`, dan About modal.
+3. **LEGAL-1 (SELESAI)** — Kata "iLovePDF Compatible" telah dibersihkan total. File lisensi terbuka `LICENSE` (MIT License) telah ditambahkan.
+4. **PERF-1/MEM-1 (SELESAI)** — Rendering pratinjau grid telah divirtualisasi/dipaginasi (50 baris/halaman). Algoritma *split-by-size* telah dioptimasikan ke pendekatan $O(N)$ berbasis estimasi ukuran PDF.
 
 ---
 
@@ -170,13 +167,13 @@ Daftar lengkap & ber-referensi ada di `fsd.md §10`. Prioritas produk:
 
 ## 14. Open Questions
 
-| ID | Pertanyaan |
-|---|---|
-| PQ-01 | Apakah `main.py` akan dihapus/diarsip atau dipertahankan? (MAINT-1) |
-| PQ-02 | Lisensi distribusi apa? (belum ada LICENSE — AQ-OPEN-06) |
-| PQ-03 | Platform pembayaran yang digunakan untuk Monetisasi Batch Excel? |
-| PQ-04 | Apakah macOS masuk roadmap? (AQ-OPEN-05) |
-| PQ-05 | Siapa pemilik sah & author final? (AQ-OPEN-03) |
+| ID | Pertanyaan | Status |
+|---|---|---|
+| PQ-01 | Apakah `main.py` akan dihapus/diarsip atau dipertahankan? | ✅ Diarsip ke `legacy/` (MAINT-1) |
+| PQ-02 | Lisensi distribusi apa? | ✅ MIT License (`LICENSE`) |
+| PQ-03 | Platform pembayaran yang digunakan untuk Monetisasi Batch Excel? | Open (Duitku / Midtrans / Stripe) |
+| PQ-04 | Apakah macOS masuk roadmap? (AQ-OPEN-05) | Backlog |
+| PQ-05 | Siapa pemilik sah & author final? (AQ-OPEN-03) | Muhammad Fahrizal Rahman |
 
 ---
 

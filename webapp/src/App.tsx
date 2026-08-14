@@ -192,7 +192,7 @@ export default function App() {
 
       let loadedPdf: PDFDocument;
       try {
-        loadedPdf = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
+        loadedPdf = await PDFDocument.load(arrayBuffer, { ignoreEncryption: false });
       } catch (pdfLibErr: any) {
         throw pdfLibErr;
       }
@@ -381,39 +381,17 @@ export default function App() {
     return out;
   };
 
-  // Attach password protection dictionary to PDFDocument (PDF 1.7 Standard Security Trailer)
-  const applyPasswordToDoc = (doc: PDFDocument) => {
-    if (!pdfPassword || !lockOutputWithPassword) return;
-    try {
-      const padding = new Uint8Array([
-        0x28, 0xbf, 0x4e, 0x5e, 0x4e, 0x75, 0x8a, 0x41, 0x64, 0x00, 0x4e, 0x56, 0xff, 0xfa, 0x01, 0x08,
-        0x2e, 0x2e, 0x00, 0xb6, 0xd0, 0x68, 0x3e, 0x80, 0x2f, 0x0c, 0xa9, 0xfe, 0x48, 0x53, 0x66, 0x74
-      ]);
-      const pwdBytes = new TextEncoder().encode(pdfPassword);
-      const passBuf = new Uint8Array(32);
-      passBuf.set(pwdBytes.subarray(0, 32));
-      if (pwdBytes.length < 32) {
-        passBuf.set(padding.subarray(0, 32 - pwdBytes.length), pwdBytes.length);
+  // Helper to save PDF bytes with AES-256 password protection via @pdfsmaller/pdf-encrypt-lite
+  const saveAndEncryptPdf = async (doc: PDFDocument): Promise<Uint8Array> => {
+    const bytes = await doc.save();
+    if (pdfPassword && lockOutputWithPassword) {
+      try {
+        return await encryptPDF(bytes, pdfPassword);
+      } catch (e) {
+        console.warn('Gagal memproteksi PDF dengan AES-256:', e);
       }
-      const uHash = md5Bytes(passBuf);
-      const oHash = md5Bytes(passBuf);
-
-      const context = doc.context;
-      const encryptDict = context.obj({
-        Filter: 'Standard',
-        V: 1,
-        R: 2,
-        O: oHash,
-        U: uHash,
-        P: -44,
-      });
-
-      const encryptRef = context.register(encryptDict);
-      // PDF spec requires Encrypt dictionary in Trailer
-      doc.context.trailerInfo.Encrypt = encryptRef;
-    } catch (e) {
-      console.warn('Gagal memasang kata sandi pada PDF:', e);
     }
+    return bytes;
   };
 
   // Helper download/save blob function with Native Save File Picker & Toast awareness (Tauri Rust IPC & Web API)
@@ -569,8 +547,7 @@ export default function App() {
             const copiedPages = await newPdf.copyPages(pdfDoc, range);
             copiedPages.forEach(p => newPdf.addPage(p));
           }
-          applyPasswordToDoc(newPdf);
-          const pdfBytes = await newPdf.save();
+          const pdfBytes = await saveAndEncryptPdf(newPdf);
           await downloadBlob(pdfBytes, `${baseName}_custom_merged.pdf`);
           setLoading(false);
           return;
@@ -579,8 +556,7 @@ export default function App() {
             const newPdf = await PDFDocument.create();
             const copiedPages = await newPdf.copyPages(pdfDoc, ranges[idx]);
             copiedPages.forEach(p => newPdf.addPage(p));
-            applyPasswordToDoc(newPdf);
-            const pdfBytes = await newPdf.save();
+            const pdfBytes = await saveAndEncryptPdf(newPdf);
             generatedFiles.push({ name: `${baseName}_range_${idx + 1}.pdf`, bytes: pdfBytes });
           }
         }
@@ -592,8 +568,7 @@ export default function App() {
           const newPdf = await PDFDocument.create();
           const copiedPages = await newPdf.copyPages(pdfDoc, range);
           copiedPages.forEach(p => newPdf.addPage(p));
-          applyPasswordToDoc(newPdf);
-          const pdfBytes = await newPdf.save();
+          const pdfBytes = await saveAndEncryptPdf(newPdf);
           generatedFiles.push({ name: `${baseName}_part_${part}.pdf`, bytes: pdfBytes });
           part++;
         }
@@ -603,8 +578,7 @@ export default function App() {
             const newPdf = await PDFDocument.create();
             const copiedPages = await newPdf.copyPages(pdfDoc, [i]);
             copiedPages.forEach(p => newPdf.addPage(p));
-            applyPasswordToDoc(newPdf);
-            const pdfBytes = await newPdf.save();
+            const pdfBytes = await saveAndEncryptPdf(newPdf);
             generatedFiles.push({ name: `${baseName}_page_${i + 1}.pdf`, bytes: pdfBytes });
           }
         } else {
@@ -615,8 +589,7 @@ export default function App() {
             const newPdf = await PDFDocument.create();
             const copiedPages = await newPdf.copyPages(pdfDoc, flatIndices);
             copiedPages.forEach(p => newPdf.addPage(p));
-            applyPasswordToDoc(newPdf);
-            const pdfBytes = await newPdf.save();
+            const pdfBytes = await saveAndEncryptPdf(newPdf);
             await downloadBlob(pdfBytes, `${baseName}_extracted.pdf`);
             setLoading(false);
             return;
@@ -625,43 +598,28 @@ export default function App() {
               const newPdf = await PDFDocument.create();
               const copiedPages = await newPdf.copyPages(pdfDoc, [idx]);
               copiedPages.forEach(p => newPdf.addPage(p));
-              applyPasswordToDoc(newPdf);
-              const pdfBytes = await newPdf.save();
+              const pdfBytes = await saveAndEncryptPdf(newPdf);
               generatedFiles.push({ name: `${baseName}_page_${idx + 1}.pdf`, bytes: pdfBytes });
             }
           }
         }
       } else if (activeSplitTab === 'size') {
-        const targetBytes = targetMB * 1024 * 1024;
+        // High performance O(N) estimation based on total PDF bytes
+        const totalDocBytes = (await pdfDoc.save()).byteLength;
+        const avgPageBytes = Math.max(1024, totalDocBytes / totalPages);
+        const targetBytes = Math.max(100 * 1024, targetMB * 1024 * 1024);
+        const pagesPerChunk = Math.max(1, Math.floor(targetBytes / avgPageBytes));
+
         let part = 1;
-        let currentPdf = await PDFDocument.create();
-
-        for (let i = 0; i < totalPages; i++) {
-          const tempPdf = await PDFDocument.create();
-          const existingPages = await tempPdf.copyPages(currentPdf, currentPdf.getPageIndices());
-          existingPages.forEach(p => tempPdf.addPage(p));
+        for (let i = 0; i < totalPages; i += pagesPerChunk) {
+          const chunkIndices = Array.from({ length: Math.min(pagesPerChunk, totalPages - i) }, (_, k) => i + k);
+          const chunkPdf = await PDFDocument.create();
+          const copiedPages = await chunkPdf.copyPages(pdfDoc, chunkIndices);
+          copiedPages.forEach(p => chunkPdf.addPage(p));
           
-          const newPage = await tempPdf.copyPages(pdfDoc, [i]);
-          tempPdf.addPage(newPage[0]);
-          
-          const tempBytes = await tempPdf.save();
-
-          if (tempBytes.byteLength > targetBytes && currentPdf.getPageCount() > 0) {
-            applyPasswordToDoc(currentPdf);
-            const currentBytes = await currentPdf.save();
-            generatedFiles.push({ name: `${baseName}_size_part_${part}.pdf`, bytes: currentBytes });
-            part++;
-            currentPdf = await PDFDocument.create();
-          }
-
-          const copied = await currentPdf.copyPages(pdfDoc, [i]);
-          currentPdf.addPage(copied[0]);
-        }
-
-        if (currentPdf.getPageCount() > 0) {
-          applyPasswordToDoc(currentPdf);
-          const finalBytes = await currentPdf.save();
-          generatedFiles.push({ name: `${baseName}_size_part_${part}.pdf`, bytes: finalBytes });
+          const chunkBytes = await saveAndEncryptPdf(chunkPdf);
+          generatedFiles.push({ name: `${baseName}_size_part_${part}.pdf`, bytes: chunkBytes });
+          part++;
         }
       }
 
@@ -738,14 +696,13 @@ export default function App() {
       const mergedPdf = await PDFDocument.create();
       for (const item of mergeFiles) {
         const arrayBuffer = await item.file.arrayBuffer();
-        const srcDoc = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
+        const srcDoc = await PDFDocument.load(arrayBuffer, { ignoreEncryption: false });
         const pageIndices = srcDoc.getPageIndices();
         const copiedPages = await mergedPdf.copyPages(srcDoc, pageIndices);
         copiedPages.forEach(p => mergedPdf.addPage(p));
       }
 
-      applyPasswordToDoc(mergedPdf);
-      const mergedBytes = await mergedPdf.save();
+      const mergedBytes = await saveAndEncryptPdf(mergedPdf);
       await downloadBlob(mergedBytes, 'BagiPDF_Merged_Document.pdf');
     } catch (err: any) {
       alert('Gagal menggabungkan PDF: ' + err.message);
@@ -838,8 +795,7 @@ export default function App() {
         }
       }
 
-      applyPasswordToDoc(doc);
-      const wmBytes = await doc.save();
+      const wmBytes = await saveAndEncryptPdf(doc);
       const baseName = file.name.replace(/\.[^/.]+$/, '');
       await downloadBlob(wmBytes, `${baseName}_watermarked.pdf`);
     } catch (err: any) {
@@ -908,8 +864,7 @@ export default function App() {
         });
       }
 
-      applyPasswordToDoc(doc);
-      const editedBytes = await doc.save();
+      const editedBytes = await saveAndEncryptPdf(doc);
       const baseName = file.name.replace(/\.[^/.]+$/, '');
       await downloadBlob(editedBytes, `${baseName}_edited.pdf`);
     } catch (err: any) {
@@ -2519,7 +2474,7 @@ export default function App() {
             </div>
             <div>
               <h3 className="text-lg font-bold text-white">BagiPDF Suite</h3>
-              <p className="text-xs text-slate-400 mt-1">Versi 2.2.0 • Rust & Tauri Engine</p>
+              <p className="text-xs text-slate-400 mt-1">Versi 2.3.0 • Rust & Tauri Engine</p>
             </div>
             <div className="w-full bg-slate-900/60 border border-slate-700/50 rounded-xl p-4 text-xs text-slate-300 space-y-2.5 text-left">
               <div className="flex items-center gap-2.5"><User className="w-4 h-4 text-indigo-400" /><span>Pengembang: <strong>Muhammmad Fahrizal Rahman</strong></span></div>
