@@ -2060,6 +2060,42 @@ export default function App() {
                 </button>
               </div>
 
+              {/* Execution Action Buttons (Always Visible at Top - No Scroll Needed) */}
+              <div className="bg-slate-900/90 border border-indigo-500/40 rounded-xl p-3 shadow-lg space-y-2">
+                {isExtractingExcel ? (
+                  <button
+                    type="button"
+                    onClick={handleCancelBatch}
+                    className="w-full bg-red-600 hover:bg-red-500 text-white font-semibold py-2.5 rounded-lg shadow-md transition flex items-center justify-center gap-2 text-xs animate-pulse"
+                  >
+                    <StopCircle className="w-4 h-4" />
+                    <span>Hentikan Proses Batch</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={excelBatchItems.length === 0}
+                    onClick={handleExecuteBatchPdfToExcel}
+                    className="w-full bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 disabled:opacity-40 text-white font-bold py-2.5 rounded-lg shadow-md transition flex items-center justify-center gap-2 text-xs"
+                  >
+                    <Play className="w-4 h-4" />
+                    <span>Mulai Konversi {excelBatchItems.length > 0 ? `(${excelBatchItems.length} PDF)` : ''}</span>
+                  </button>
+                )}
+
+                {excelBatchItems.length > 0 && (
+                  <button
+                    type="button"
+                    disabled={isExtractingExcel || excelBatchItems.filter(i => i.status === 'success').length === 0}
+                    onClick={handleExportBatchExcel}
+                    className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-30 text-white font-semibold py-2 rounded-lg shadow-sm transition flex items-center justify-center gap-1.5 text-xs"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Unduh Hasil Excel</span>
+                  </button>
+                )}
+              </div>
+
               {/* Hidden Inputs */}
               <input
                 ref={folderInputRef}
@@ -2191,40 +2227,6 @@ export default function App() {
                 />
               </div>
 
-              {/* Execution Action Buttons */}
-              <div className="mt-auto space-y-2">
-                {isExtractingExcel ? (
-                  <button
-                    type="button"
-                    onClick={handleCancelBatch}
-                    className="w-full bg-red-600 hover:bg-red-500 text-white font-semibold py-2.5 rounded-lg shadow-md transition flex items-center justify-center gap-2 text-xs animate-pulse"
-                  >
-                    <StopCircle className="w-4 h-4" />
-                    <span>Hentikan Proses Batch</span>
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    disabled={excelBatchItems.length === 0}
-                    onClick={handleExecuteBatchPdfToExcel}
-                    className="w-full bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 disabled:opacity-40 text-white font-semibold py-2.5 rounded-lg shadow-md transition flex items-center justify-center gap-2 text-xs"
-                  >
-                    <Play className="w-4 h-4" />
-                    <span>Mulai Konversi {excelBatchItems.length > 0 ? `(${excelBatchItems.length} PDF)` : ''}</span>
-                  </button>
-                )}
-
-                {excelBatchItems.length > 0 && (
-                  <button
-                    type="button"
-                    disabled={isExtractingExcel || excelBatchItems.filter(i => i.status === 'success').length === 0}
-                    onClick={handleExportBatchExcel}
-                    className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-30 text-white font-semibold py-2 rounded-lg shadow-sm transition flex items-center justify-center gap-1.5 text-xs mt-2"
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    <span>Unduh Hasil Excel</span>
-                  </button>
-                )}
               </div>
             </aside>
 
@@ -2491,7 +2493,7 @@ export default function App() {
             </div>
             <div>
               <h3 className="text-lg font-bold text-white">BagiPDF Suite</h3>
-              <p className="text-xs text-slate-400 mt-1">Versi 2.3.0 • Rust & Tauri Engine</p>
+              <p className="text-xs text-slate-400 mt-1">Versi 2.3.1 • Rust & Tauri Engine</p>
             </div>
             <div className="w-full bg-slate-900/60 border border-slate-700/50 rounded-xl p-4 text-xs text-slate-300 space-y-2.5 text-left">
               <div className="flex items-center gap-2.5"><User className="w-4 h-4 text-indigo-400" /><span>Pengembang: <strong>Muhammmad Fahrizal Rahman</strong></span></div>
