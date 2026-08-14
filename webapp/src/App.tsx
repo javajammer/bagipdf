@@ -1268,6 +1268,15 @@ export default function App() {
     setBatchProgress({ current: 0, total: 0, currentFileName: '', successCount: 0, errorCount: 0 });
   };
 
+  const handleRemoveBatchItem = (id: string) => {
+    if (isExtractingExcel) return;
+    setExcelBatchItems(prev => {
+      const newItems = prev.filter(item => item.id !== id);
+      setBatchProgress(p => ({ ...p, total: newItems.length }));
+      return newItems;
+    });
+  };
+
   // Memoized Preview Filtering & Pagination for light DOM rendering up to 2000 files
   const filteredPreviewRows = React.useMemo(() => {
     if (!excelData || excelData.length === 0) return [];
@@ -2055,10 +2064,9 @@ export default function App() {
               <input
                 ref={folderInputRef}
                 type="file"
-                accept="application/pdf"
                 // @ts-ignore
-                webkitdirectory=""
-                directory=""
+                webkitdirectory="true"
+                directory="true"
                 multiple
                 onChange={handleFolderSelect}
                 className="hidden"
@@ -2207,27 +2215,15 @@ export default function App() {
                 )}
 
                 {excelBatchItems.length > 0 && (
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      disabled={isExtractingExcel || excelBatchItems.filter(i => i.status === 'success').length === 0}
-                      onClick={handleExportBatchExcel}
-                      className="flex-1 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-30 text-white font-semibold py-2 rounded-lg shadow-sm transition flex items-center justify-center gap-1.5 text-xs"
-                    >
-                      <Download className="w-3.5 h-3.5" />
-                      <span>Unduh Hasil Excel</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      disabled={isExtractingExcel}
-                      onClick={handleClearBatch}
-                      className="bg-slate-800 hover:bg-slate-700 disabled:opacity-30 text-slate-300 p-2 rounded-lg border border-slate-700"
-                      title="Reset Daftar Batch"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
+                  <button
+                    type="button"
+                    disabled={isExtractingExcel || excelBatchItems.filter(i => i.status === 'success').length === 0}
+                    onClick={handleExportBatchExcel}
+                    className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-30 text-white font-semibold py-2 rounded-lg shadow-sm transition flex items-center justify-center gap-1.5 text-xs mt-2"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Unduh Hasil Excel</span>
+                  </button>
                 )}
               </div>
             </aside>
@@ -2258,6 +2254,17 @@ export default function App() {
                     <Grid className="w-3.5 h-3.5" />
                     <span>Pratinjau Grid Excel ({excelData.length > 0 ? excelData.length - 1 : 0} Baris)</span>
                   </button>
+                  {excelBatchItems.length > 0 && !isExtractingExcel && (
+                    <button
+                      type="button"
+                      onClick={handleClearBatch}
+                      className="px-2 py-1 text-xs font-semibold rounded-md text-red-400 hover:text-white hover:bg-red-500 transition flex items-center gap-1.5 ml-1 border border-red-500/30"
+                      title="Hapus Seluruh Data Batch"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Bersihkan</span>
+                    </button>
+                  )}
                 </div>
 
                 {/* Processing Status Banner */}
@@ -2349,6 +2356,16 @@ export default function App() {
                               <span className="text-[10px] text-red-400 bg-red-500/10 border border-red-500/30 px-2 py-0.5 rounded flex items-center gap-1" title={item.errorMsg}>
                                 <AlertCircle className="w-3 h-3 text-red-400" /> Gagal
                               </span>
+                            )}
+                            {!isExtractingExcel && (
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveBatchItem(item.id)}
+                                className="w-6 h-6 flex items-center justify-center rounded-md text-slate-500 hover:text-red-400 hover:bg-red-500/20 transition border border-transparent hover:border-red-500/30 ml-1"
+                                title="Hapus File Ini"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
                             )}
                           </div>
                         </div>
