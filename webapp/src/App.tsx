@@ -148,6 +148,7 @@ export default function App() {
   const [excelData, setExcelData] = useState<string[][]>([]);
   const [isExtractingExcel, setIsExtractingExcel] = useState<boolean>(false);
   const [excelBatchItems, setExcelBatchItems] = useState<BatchPdfItem[]>([]);
+  const [excelExtractionType, setExcelExtractionType] = useState<'ebupot' | 'generic'>('ebupot');
   const [excelOutputMode, setExcelOutputMode] = useState<'consolidated' | 'zip'>('consolidated');
   const [sanitizeFormulas, setSanitizeFormulas] = useState<boolean>(true);
   const [batchProgress, setBatchProgress] = useState<{ current: number; total: number; currentFileName: string; successCount: number; errorCount: number }>({
@@ -1009,6 +1010,71 @@ export default function App() {
     e.target.value = '';
   };
 
+  const parseEbupotPdfDocument = async (pdfJsDoc: any, fileName: string): Promise<string[]> => {
+    const page = await pdfJsDoc.getPage(1);
+    const textContent = await page.getTextContent();
+    
+    // Explicitly release page resources to prevent memory leaks on low-RAM machines
+    try { page.cleanup(); } catch (e) {}
+
+    const items = textContent.items as any[];
+    const fullText = items.map((it: any) => it.str).join(' ');
+
+    const extractMatch = (regex: RegExp, defaultVal: string = ''): string => {
+      const match = fullText.match(regex);
+      return match ? match[1].trim() : defaultVal;
+    };
+
+    const headerMatch = fullText.match(/([A-Z0-9]{8,12})\s+(\d{2}-\d{4})\s+(TIDAK FINAL|FINAL)\s+(NORMAL|PEMBETULAN)/i);
+    const nomorDokumen = headerMatch ? headerMatch[1] : extractMatch(/([A-Z0-9]{9})/);
+    const masaPajak = headerMatch ? headerMatch[2] : extractMatch(/(\d{2}-\d{4})/);
+    const statusBukti = headerMatch ? headerMatch[4] : (fullText.includes('PEMBETULAN') ? 'PEMBETULAN' : 'NORMAL');
+
+    const npwpNik = extractMatch(/A\.1\s+NPWP\s*\/\s*NIK\s*:\s*(\d{15,16})/i);
+    const nama = extractMatch(/A\.2\s+NAMA\s*:\s*(.+?)\s+A\.3/i);
+    const jenisFasilitas = extractMatch(/B\.1\s+Jenis Fasilitas\s*:\s*(.+?)\s+B\.2/i, 'Tanpa Fasilitas');
+    const jenisPPh = extractMatch(/B\.2\s+Jenis PPh\s*:\s*(.+?)\s+KODE/i, 'Pasal 23');
+
+    const tableMatch = fullText.match(/(\d{2}-\d{3}-\d{2})\s+(.+?)\s+([\d\.]+)\s+([\d,]+%?)\s+([\d\.]+)\s+B\.8/i);
+    const kodeObjekPajak = tableMatch ? tableMatch[1] : extractMatch(/(\d{2}-\d{3}-\d{2})/);
+    const objekPajak = tableMatch ? tableMatch[2] : '';
+    const dpp = tableMatch ? tableMatch[3] : '';
+    let tarif = tableMatch ? tableMatch[4] : '';
+    if (tarif && !tarif.includes('%')) tarif = `${tarif},00%`;
+    const pph = tableMatch ? tableMatch[5] : '';
+
+    const docMatch = fullText.match(/Jenis Dokumen\s*:\s*(.+?)\s+Tanggal\s*:\s*(.+?)\s+B\.9/i);
+    const jenisDokumenDasar = docMatch ? `${docMatch[1].trim()} , Tanggal : ${docMatch[2].trim()}` : '';
+
+    const noDokumenDasar = extractMatch(/B\.9\s+Nomor Dokumen\s*:\s*(.+?)\s+B\.10/i);
+    const npwpPemotong = extractMatch(/C\.1\s+NPWP\s*\/\s*NIK\s*:\s*(\d{15,16})/i);
+    const namaPemotong = extractMatch(/C\.3\s+NAMA PEMOTONG[^\n:]*:\s*(.+?)\s+C\.4/i);
+    const tanggalPemotong = extractMatch(/C\.4\s+TANGGAL\s*:\s*(.+?)\s+C\.5/i);
+
+    const clean = (val: string) => sanitizeFormulas ? sanitizeExcelCell(val) : val.trim();
+
+    return [
+      clean(nomorDokumen),
+      clean(masaPajak),
+      clean(npwpNik),
+      clean(nama),
+      clean(statusBukti),
+      clean(jenisFasilitas),
+      clean(jenisPPh),
+      clean(kodeObjekPajak),
+      clean(objekPajak),
+      clean(dpp),
+      clean(tarif),
+      clean(pph),
+      clean(jenisDokumenDasar),
+      clean(noDokumenDasar),
+      clean(npwpPemotong),
+      clean(namaPemotong),
+      clean(tanggalPemotong),
+      clean(fileName)
+    ];
+  };
+
   const handleExecuteBatchPdfToExcel = async () => {
     if (excelBatchItems.length === 0) {
       alert('Harap pilih folder atau file PDF terlebih dahulu!');
@@ -1024,7 +1090,32 @@ export default function App() {
     const total = excelBatchItems.length;
 
     const consolidatedRows: string[][] = [];
-    consolidatedRows.push(['Nama File PDF', 'Halaman', 'Kolom 1 / Konten Teks', 'Position Y', 'Position X']);
+
+    if (excelExtractionType === 'ebupot') {
+      consolidatedRows.push([
+        'No',
+        'Nomor Dokumen',
+        'Masa Pajak',
+        'NPWP/NIK',
+        'Nama',
+        'Status Bukti',
+        'Jenis Fasilitas',
+        'Jenis PPh',
+        'Kode Objek Pajak',
+        'Objek Pajak',
+        'DPP (Rp)',
+        'Tarif (%)',
+        'Pajak Penghasilan (Rp)',
+        'Jenis Dokumen Dasar',
+        'Nomor Dokumen Dasar',
+        'NPWP/NIK Pemotong',
+        'Nama Pemotong',
+        'Tanggal',
+        'File Name'
+      ]);
+    } else {
+      consolidatedRows.push(['Nama File PDF', 'Halaman', 'Kolom 1 / Konten Teks', 'Position Y', 'Position X']);
+    }
 
     const updatedBatchItems = [...excelBatchItems];
 
@@ -1036,14 +1127,18 @@ export default function App() {
 
       const item = updatedBatchItems[idx];
       item.status = 'processing';
-      setExcelBatchItems([...updatedBatchItems]);
-      setBatchProgress({
-        current: idx + 1,
-        total,
-        currentFileName: item.file.name,
-        successCount,
-        errorCount
-      });
+      
+      // Throttle UI Updates to prevent React from freezing on low-end CPUs (e.g. 2 cores, 4GB RAM)
+      if (idx % 10 === 0 || idx === total - 1) {
+        setExcelBatchItems([...updatedBatchItems]);
+        setBatchProgress({
+          current: idx + 1,
+          total,
+          currentFileName: item.file.name,
+          successCount,
+          errorCount
+        });
+      }
 
       try {
         const arrayBuffer = await item.file.arrayBuffer();
@@ -1052,32 +1147,43 @@ export default function App() {
 
         const fileRows: string[][] = [];
 
-        for (let p = 1; p <= pageCount; p++) {
-          const page = await pdfJsDoc.getPage(p);
-          const textContent = await page.getTextContent();
-          const items = textContent.items as any[];
-          const lineMap: { [y: number]: any[] } = {};
+        if (excelExtractionType === 'ebupot') {
+          const ebupotRow = await parseEbupotPdfDocument(pdfJsDoc, item.file.name);
+          const fullRowWithNo = [String(successCount + 1), ...ebupotRow];
+          fileRows.push(fullRowWithNo);
+          consolidatedRows.push(fullRowWithNo);
+        } else {
+          for (let p = 1; p <= pageCount; p++) {
+            const page = await pdfJsDoc.getPage(p);
+            const textContent = await page.getTextContent();
+            
+            // Explicitly release memory immediately for large generic PDFs
+            try { page.cleanup(); } catch (e) {}
 
-          for (const it of items) {
-            if (!it.str || !it.str.trim()) continue;
-            const y = Math.round(it.transform[5] / 10) * 10;
-            if (!lineMap[y]) lineMap[y] = [];
-            lineMap[y].push(it);
-          }
+            const items = textContent.items as any[];
+            const lineMap: { [y: number]: any[] } = {};
 
-          const sortedYs = Object.keys(lineMap).map(Number).sort((a, b) => b - a);
+            for (const it of items) {
+              if (!it.str || !it.str.trim()) continue;
+              const y = Math.round(it.transform[5] / 10) * 10;
+              if (!lineMap[y]) lineMap[y] = [];
+              lineMap[y].push(it);
+            }
 
-          for (const y of sortedYs) {
-            const rowItems = lineMap[y];
-            rowItems.sort((a, b) => a.transform[4] - b.transform[4]);
-            const rowValues = rowItems.map(it => {
-              const str = it.str.trim();
-              return sanitizeFormulas ? sanitizeExcelCell(str) : str;
-            });
+            const sortedYs = Object.keys(lineMap).map(Number).sort((a, b) => b - a);
 
-            const rowData = [item.file.name, `Halaman ${p}`, ...rowValues];
-            fileRows.push(rowData);
-            consolidatedRows.push(rowData);
+            for (const y of sortedYs) {
+              const rowItems = lineMap[y];
+              rowItems.sort((a, b) => a.transform[4] - b.transform[4]);
+              const rowValues = rowItems.map(it => {
+                const str = it.str.trim();
+                return sanitizeFormulas ? sanitizeExcelCell(str) : str;
+              });
+
+              const rowData = [item.file.name, `Halaman ${p}`, ...rowValues];
+              fileRows.push(rowData);
+              consolidatedRows.push(rowData);
+            }
           }
         }
 
@@ -1087,8 +1193,12 @@ export default function App() {
 
         item.status = 'success';
         item.pageCount = pageCount;
+        
+        // Prevent storing massive data in React State if we are in consolidated mode to save RAM
+        if (excelOutputMode === 'zip') {
+          item.extractedRows = fileRows;
+        }
         item.rowCount = fileRows.length;
-        item.extractedRows = fileRows;
         successCount++;
 
       } catch (err: any) {
@@ -1098,17 +1208,11 @@ export default function App() {
         errorCount++;
       }
 
-      setExcelBatchItems([...updatedBatchItems]);
-      setBatchProgress({
-        current: idx + 1,
-        total,
-        currentFileName: item.file.name,
-        successCount,
-        errorCount
-      });
-
-      // Yield event loop every 5 files to maintain lightweight, 60 FPS UI performance
-      if (idx % 5 === 0 || idx === total - 1) {
+      // Force Garbage Collection Yield & Event Loop Breathing Room
+      if (idx % 25 === 0) {
+        // Sleep for 20ms to allow DOM repaints and memory GC on low-end CPUs
+        await new Promise(resolve => setTimeout(resolve, 20));
+      } else if (idx % 5 === 0 || idx === total - 1) {
         await new Promise(resolve => setTimeout(resolve, 0));
       }
     }
@@ -1120,7 +1224,7 @@ export default function App() {
     if (!cancelBatchRef.current) {
       showToastNotification(
         'Konversi Batch Selesai!',
-        `Berhasil memproses ${successCount} dari ${total} file PDF ke Excel.`,
+        `Berhasil memproses ${successCount} dari ${total} file PDF ke Excel (${excelExtractionType === 'ebupot' ? 'Format Ebupot Unifikasi 21/26' : 'Format Generik'}).`,
         'success'
       );
     }
@@ -1165,9 +1269,13 @@ export default function App() {
         for (const item of processedItems) {
           if (!item.extractedRows || item.extractedRows.length === 0) continue;
           
+          const zipHeader = excelExtractionType === 'ebupot' 
+            ? ['No', 'Nomor Dokumen', 'Masa Pajak', 'NPWP/NIK', 'Nama', 'Status Bukti', 'Jenis Fasilitas', 'Jenis PPh', 'Kode Objek Pajak', 'Objek Pajak', 'DPP (Rp)', 'Tarif (%)', 'Pajak Penghasilan (Rp)', 'Jenis Dokumen Dasar', 'Nomor Dokumen Dasar', 'NPWP/NIK Pemotong', 'Nama Pemotong', 'Tanggal', 'File Name']
+            : ['Halaman', 'Kolom 1 / Konten Teks', 'Position Y', 'Position X'];
+
           const fileData: string[][] = [
-            ['Halaman', 'Kolom 1 / Konten Teks', 'Position Y', 'Position X'],
-            ...item.extractedRows.map(row => row.slice(1))
+            zipHeader,
+            ...item.extractedRows
           ];
 
           const ws = XLSX.utils.aoa_to_sheet(fileData);
@@ -2014,6 +2122,42 @@ export default function App() {
                 <label className="text-xs font-semibold text-slate-300 block border-b border-slate-800 pb-1.5">
                   Format Output & Keamanan
                 </label>
+
+                {/* Extraction Mode Option */}
+                <div className="space-y-1.5 pb-2 border-b border-slate-800">
+                  <label className="text-[11px] text-slate-400 font-medium block">Tipe Ekstraksi Format:</label>
+                  <div className="flex flex-col gap-1.5">
+                    <label className="flex items-center gap-2 cursor-pointer text-xs text-slate-200 bg-indigo-950/40 p-2 rounded-lg border border-indigo-500/30 hover:border-indigo-400 transition">
+                      <input
+                        type="radio"
+                        name="extractionType"
+                        checked={excelExtractionType === 'ebupot'}
+                        onChange={() => setExcelExtractionType('ebupot')}
+                        className="text-indigo-600 focus:ring-0"
+                      />
+                      <div>
+                        <span className="font-semibold text-indigo-300 flex items-center gap-1.5">
+                          📄 Ebupot Unifikasi 21/26 (DJP)
+                        </span>
+                        <p className="text-[10px] text-slate-400">Ekstrak 19 kolom terstruktur Bukti Potong DJP (BPPU)</p>
+                      </div>
+                    </label>
+
+                    <label className="flex items-center gap-2 cursor-pointer text-xs text-slate-200 bg-slate-950/60 p-2 rounded-lg border border-slate-800 hover:border-indigo-500/40 transition">
+                      <input
+                        type="radio"
+                        name="extractionType"
+                        checked={excelExtractionType === 'generic'}
+                        onChange={() => setExcelExtractionType('generic')}
+                        className="text-indigo-600 focus:ring-0"
+                      />
+                      <div>
+                        <span className="font-medium text-slate-300">Tabel Generik (Semua PDF)</span>
+                        <p className="text-[10px] text-slate-400">Ekstrak semua baris & kolom teks berbasis posisi</p>
+                      </div>
+                    </label>
+                  </div>
+                </div>
 
                 {/* Output Mode Option */}
                 <div className="space-y-1.5">
