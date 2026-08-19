@@ -40,7 +40,8 @@ import {
   AlertCircle,
   Search,
   FileText,
-  FileUp
+  FileUp,
+  Loader2
 } from 'lucide-react';
 
 import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.min.js?url';
@@ -113,6 +114,57 @@ export default function App() {
   const [modalError, setModalError] = useState<string>('');
   const [pendingFile, setPendingFile] = useState<File | null>(null);
 
+  // --- IP RESTRICTION STATE ---
+  const [isIpAuthorized, setIsIpAuthorized] = useState<boolean | null>(null);
+  const [currentPublicIp, setCurrentPublicIp] = useState<string>('');
+
+  React.useEffect(() => {
+    const checkIpRestriction = async () => {
+      const ALLOWED_IP = '182.253.235.144';
+      
+      // 1. Try native Rust verification if running inside Tauri
+      if ('__TAURI_INTERNALS__' in window || '__TAURI__' in window) {
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          const isAllowed = await invoke<boolean>('verify_ip_access');
+          setIsIpAuthorized(isAllowed);
+          if (isAllowed) return;
+        } catch (e) {
+          console.warn('Rust verify_ip_access error, falling back to JS fetch:', e);
+        }
+      }
+
+      // 2. Web / Frontend IP check fallback
+      const ipEndpoints = [
+        'https://api.ipify.org?format=json',
+        'https://ipinfo.io/json',
+        'https://icanhazip.com'
+      ];
+
+      for (const endpoint of ipEndpoints) {
+        try {
+          const res = await fetch(endpoint);
+          if (res.ok) {
+            const data = await res.json().catch(async () => ({ ip: (await res.text()).trim() }));
+            const userIp = (data.ip || data).trim();
+            if (userIp) {
+              setCurrentPublicIp(userIp);
+              setIsIpAuthorized(userIp === ALLOWED_IP);
+              return;
+            }
+          }
+        } catch (err) {
+          console.warn(`IP fetch failed for ${endpoint}:`, err);
+        }
+      }
+
+      // Deny access if IP cannot be verified
+      setIsIpAuthorized(false);
+    };
+
+    checkIpRestriction();
+  }, []);
+
   // --- SPLIT MODE STATE ---
   const [activeSplitTab, setActiveSplitTab] = useState<'custom' | 'fixed' | 'extract' | 'size'>('custom');
   const [customRanges, setCustomRanges] = useState<string>('1-2, 3-4');
@@ -151,6 +203,7 @@ export default function App() {
   const [excelExtractionType, setExcelExtractionType] = useState<'ebupot' | 'generic'>('ebupot');
   const [excelOutputMode, setExcelOutputMode] = useState<'consolidated' | 'zip'>('consolidated');
   const [sanitizeFormulas, setSanitizeFormulas] = useState<boolean>(true);
+  const [isLoadingFolder, setIsLoadingFolder] = useState<boolean>(false);
   const [batchProgress, setBatchProgress] = useState<{ current: number; total: number; currentFileName: string; successCount: number; errorCount: number }>({
     current: 0,
     total: 0,
@@ -889,42 +942,55 @@ export default function App() {
   const handleFolderSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || e.target.files.length === 0) return;
     
-    const allFiles = Array.from(e.target.files);
-    const pdfFiles = allFiles.filter(f => f.name.toLowerCase().endsWith('.pdf'));
+    setIsLoadingFolder(true);
+    setTimeout(() => {
+      try {
+        const allFiles = Array.from(e.target.files || []);
+        // Sort files in reverse order (Terakhir ke Terawal)
+        const pdfFiles = allFiles
+          .filter(f => f.name.toLowerCase().endsWith('.pdf'))
+          .sort((a, b) => b.name.localeCompare(a.name, undefined, { numeric: true, sensitivity: 'base' }));
 
-    if (pdfFiles.length === 0) {
-      showToastNotification('Tidak Ada File PDF', 'Tidak ditemukan file berformat .pdf di dalam folder tersebut.', 'error');
-      return;
-    }
+        if (pdfFiles.length === 0) {
+          showToastNotification('Tidak Ada File PDF', 'Tidak ditemukan file berformat .pdf di dalam folder tersebut.', 'error');
+          setIsLoadingFolder(false);
+          return;
+        }
 
-    let filesToUse = pdfFiles;
-    if (pdfFiles.length > 2000) {
-      showToastNotification(
-        'Batas Maksimal 2000 File',
-        `Terdeteksi ${pdfFiles.length} file PDF. 2000 file pertama dipilih untuk kestabilan & performa aplikasi.`,
-        'info'
-      );
-      filesToUse = pdfFiles.slice(0, 2000);
-    } else {
-      showToastNotification(
-        'Folder Berhasil Dimuat',
-        `Ditemukan ${pdfFiles.length} file PDF di dalam folder.`,
-        'success'
-      );
-    }
+        let filesToUse = pdfFiles;
+        if (pdfFiles.length > 2000) {
+          showToastNotification(
+            'Batas Maksimal 2000 File',
+            `Terdeteksi ${pdfFiles.length} file PDF. 2000 file pertama dipilih untuk kestabilan & performa aplikasi.`,
+            'info'
+          );
+          filesToUse = pdfFiles.slice(0, 2000);
+        } else {
+          showToastNotification(
+            'Folder Berhasil Dimuat',
+            `Ditemukan ${pdfFiles.length} file PDF di dalam folder (diurutkan dari file terakhir ke terawal).`,
+            'success'
+          );
+        }
 
-    const items: BatchPdfItem[] = filesToUse.map(f => ({
-      id: Math.random().toString(36).substring(2, 9),
-      file: f,
-      relativePath: f.webkitRelativePath || f.name,
-      status: 'pending'
-    }));
+        const items: BatchPdfItem[] = filesToUse.map(f => ({
+          id: Math.random().toString(36).substring(2, 9),
+          file: f,
+          relativePath: f.webkitRelativePath || f.name,
+          status: 'pending'
+        }));
 
-    setExcelBatchItems(items);
-    setExcelData([]);
-    setExcelPreviewPage(1);
-    setBatchProgress({ current: 0, total: items.length, currentFileName: '', successCount: 0, errorCount: 0 });
-    e.target.value = '';
+        setExcelBatchItems(items);
+        setExcelData([]);
+        setExcelPreviewPage(1);
+        setBatchProgress({ current: 0, total: items.length, currentFileName: '', successCount: 0, errorCount: 0 });
+      } catch (err) {
+        console.error('Error reading folder:', err);
+      } finally {
+        setIsLoadingFolder(false);
+        e.target.value = '';
+      }
+    }, 150);
   };
 
   const handleBatchFilesSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -954,13 +1020,16 @@ export default function App() {
       status: 'pending'
     }));
 
+    let updatedItems: BatchPdfItem[] = [];
     setExcelBatchItems(prev => {
       const combined = [...prev, ...items];
       if (combined.length > 2000) {
         showToastNotification('Batas Maksimal 2000 File', 'Jumlah file dibatasi 2000 file PDF.', 'info');
-        return combined.slice(0, 2000);
+        updatedItems = combined.slice(0, 2000);
+      } else {
+        updatedItems = combined;
       }
-      return combined;
+      return updatedItems;
     });
     e.target.value = '';
   };
@@ -1003,6 +1072,7 @@ export default function App() {
 
     const noDokumenDasar = extractMatch(/B\.9\s+Nomor Dokumen\s*:\s*(.+?)\s+B\.10/i);
     const npwpPemotong = extractMatch(/C\.1\s+NPWP\s*\/\s*NIK\s*:\s*(\d{15,16})/i);
+    const nitkuPemotong = extractMatch(/C\.2\s+NOMOR IDENTITAS TEMPAT KEGIATAN\s+USAHA\s*\(NITKU\)\s*\/\s*SUBUNIT ORGANISASI\s*:\s*(.+?)\s+C\.3/i);
     const namaPemotong = extractMatch(/C\.3\s+NAMA PEMOTONG[^\n:]*:\s*(.+?)\s+C\.4/i);
     const tanggalPemotong = extractMatch(/C\.4\s+TANGGAL\s*:\s*(.+?)\s+C\.5/i);
 
@@ -1025,13 +1095,15 @@ export default function App() {
       clean(noDokumenDasar),
       clean(npwpPemotong),
       clean(namaPemotong),
+      clean(nitkuPemotong),
       clean(tanggalPemotong),
       clean(fileName)
     ];
   };
 
-  const handleExecuteBatchPdfToExcel = async () => {
-    if (excelBatchItems.length === 0) {
+  const startBatchPdfToExcelExecution = async (itemsToProcess?: BatchPdfItem[]) => {
+    const items = itemsToProcess || excelBatchItems;
+    if (items.length === 0) {
       alert('Harap pilih folder atau file PDF terlebih dahulu!');
       return;
     }
@@ -1042,7 +1114,7 @@ export default function App() {
 
     let successCount = 0;
     let errorCount = 0;
-    const total = excelBatchItems.length;
+    const total = items.length;
 
     const consolidatedRows: string[][] = [];
 
@@ -1065,6 +1137,7 @@ export default function App() {
         'Nomor Dokumen Dasar',
         'NPWP/NIK Pemotong',
         'Nama Pemotong',
+        'NITKU / Subunit Organisasi Pemotong',
         'Tanggal',
         'File Name'
       ]);
@@ -1072,7 +1145,7 @@ export default function App() {
       consolidatedRows.push(['Nama File PDF', 'Halaman', 'Kolom 1 / Konten Teks', 'Position Y', 'Position X']);
     }
 
-    const updatedBatchItems = [...excelBatchItems];
+    const updatedBatchItems = [...items];
 
     for (let idx = 0; idx < total; idx++) {
       if (cancelBatchRef.current) {
@@ -1225,7 +1298,7 @@ export default function App() {
           if (!item.extractedRows || item.extractedRows.length === 0) continue;
           
           const zipHeader = excelExtractionType === 'ebupot' 
-            ? ['No', 'Nomor Dokumen', 'Masa Pajak', 'NPWP/NIK', 'Nama', 'Status Bukti', 'Jenis Fasilitas', 'Jenis PPh', 'Kode Objek Pajak', 'Objek Pajak', 'DPP (Rp)', 'Tarif (%)', 'Pajak Penghasilan (Rp)', 'Jenis Dokumen Dasar', 'Nomor Dokumen Dasar', 'NPWP/NIK Pemotong', 'Nama Pemotong', 'Tanggal', 'File Name']
+            ? ['No', 'Nomor Dokumen', 'Masa Pajak', 'NPWP/NIK', 'Nama', 'Status Bukti', 'Jenis Fasilitas', 'Jenis PPh', 'Kode Objek Pajak', 'Objek Pajak', 'DPP (Rp)', 'Tarif (%)', 'Pajak Penghasilan (Rp)', 'Jenis Dokumen Dasar', 'Nomor Dokumen Dasar', 'NPWP/NIK Pemotong', 'Nama Pemotong', 'NITKU / Subunit Organisasi Pemotong', 'Tanggal', 'File Name']
             : ['Halaman', 'Kolom 1 / Konten Teks', 'Position Y', 'Position X'];
 
           const fileData: string[][] = [
@@ -1351,6 +1424,38 @@ export default function App() {
       setStatusMsg('');
     }
   };
+
+  // IP Access Control Restriction Block
+  if (isIpAuthorized === false) {
+    return (
+      <div className="min-h-screen bg-[#121216] text-slate-200 flex flex-col items-center justify-center p-6 font-sans select-none antialiased">
+        <div className="max-w-md w-full bg-[#1E1E28] border border-red-500/40 rounded-2xl p-8 text-center shadow-2xl backdrop-blur-xl flex flex-col items-center gap-4">
+          <div className="w-16 h-16 rounded-full bg-red-500/10 border border-red-500/30 flex items-center justify-center text-red-500 shadow-inner">
+            <AlertCircle className="w-8 h-8" />
+          </div>
+          <div>
+            <h1 className="text-xl font-bold text-white">Akses Ditolak (Access Denied)</h1>
+            <p className="text-xs text-slate-400 mt-2 leading-relaxed">
+              Aplikasi ini dikonfigurasi dengan batasan keamanan ketat dan <strong>HANYA dapat diakses</strong> melalui jaringan IP Publik yang diizinkan.
+            </p>
+          </div>
+          <div className="w-full bg-slate-950/80 border border-slate-800 rounded-xl p-3.5 text-left text-xs font-mono space-y-1.5">
+            <div className="flex justify-between text-slate-400">
+              <span>IP Diizinkan:</span>
+              <span className="text-emerald-400 font-semibold">182.253.235.144</span>
+            </div>
+            <div className="flex justify-between text-slate-400">
+              <span>IP Publik Anda:</span>
+              <span className="text-red-400 font-semibold">{currentPublicIp || 'Tidak Terdeteksi / Offline'}</span>
+            </div>
+          </div>
+          <p className="text-[11px] text-slate-500">
+            Silakan hubungkan perangkat Anda ke jaringan IP Publik yang berwenang untuk menggunakan BagiPDF.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#1E1E24] text-slate-200 flex flex-col font-sans select-none antialiased relative">
@@ -2039,13 +2144,74 @@ export default function App() {
               <div className="grid grid-cols-2 gap-2">
                 <button
                   type="button"
-                  disabled={isExtractingExcel}
-                  onClick={() => folderInputRef.current?.click()}
-                  className="flex flex-col items-center justify-center p-3 rounded-xl border border-indigo-500/40 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-200 transition group disabled:opacity-50"
+                  disabled={isExtractingExcel || isLoadingFolder}
+                  onClick={async () => {
+                    if ('__TAURI_INTERNALS__' in window || '__TAURI__' in window) {
+                      setIsLoadingFolder(true);
+                      try {
+                        const { invoke } = await import('@tauri-apps/api/core');
+                        const nativeFiles = await invoke<Array<{ name: string; path: string; bytes: number[] }> | null>('select_folder_dialog');
+                        
+                        if (nativeFiles && nativeFiles.length > 0) {
+                          // Sort native files from last to first (Z to A / numeric reverse)
+                          const sortedNative = [...nativeFiles].sort((a, b) => 
+                            b.name.localeCompare(a.name, undefined, { numeric: true, sensitivity: 'base' })
+                          );
+
+                          const fileObjects = sortedNative.map(nf => {
+                            const blob = new Blob([new Uint8Array(nf.bytes)], { type: 'application/pdf' });
+                            return new File([blob], nf.name, { type: 'application/pdf' });
+                          });
+
+                          let filesToUse = fileObjects;
+                          if (fileObjects.length > 2000) {
+                            showToastNotification('Batas Maksimal 2000 File', `Terdeteksi ${fileObjects.length} file PDF. 2000 file pertama dipilih.`, 'info');
+                            filesToUse = fileObjects.slice(0, 2000);
+                          } else {
+                            showToastNotification('Folder Berhasil Dimuat', `Ditemukan ${fileObjects.length} file PDF di dalam folder (diurutkan file terakhir ke terawal).`, 'success');
+                          }
+
+                          const items: BatchPdfItem[] = filesToUse.map(f => ({
+                            id: Math.random().toString(36).substring(2, 9),
+                            file: f,
+                            relativePath: f.name,
+                            status: 'pending'
+                          }));
+
+                          setExcelBatchItems(items);
+                          setExcelData([]);
+                          setExcelPreviewPage(1);
+                          setBatchProgress({ current: 0, total: items.length, currentFileName: '', successCount: 0, errorCount: 0 });
+                          setIsLoadingFolder(false);
+                          return;
+                        } else if (nativeFiles && nativeFiles.length === 0) {
+                          showToastNotification('Tidak Ada File PDF', 'Tidak ditemukan file berformat .pdf di dalam folder tersebut.', 'error');
+                          setIsLoadingFolder(false);
+                          return;
+                        }
+                      } catch (err) {
+                        console.warn('Native folder picker fallback:', err);
+                      } finally {
+                        setIsLoadingFolder(false);
+                      }
+                    }
+                    folderInputRef.current?.click();
+                  }}
+                  className="flex flex-col items-center justify-center p-3 rounded-xl border border-indigo-500/40 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-200 transition group disabled:opacity-50 relative"
                 >
-                  <FolderOpen className="w-6 h-6 text-indigo-400 group-hover:scale-110 transition mb-1" />
-                  <span className="text-xs font-semibold">📁 Pilih Folder</span>
-                  <span className="text-[10px] text-slate-400">Baca seluruh PDF</span>
+                  {isLoadingFolder ? (
+                    <>
+                      <Loader2 className="w-6 h-6 text-indigo-400 animate-spin mb-1" />
+                      <span className="text-xs font-semibold text-indigo-300">Memuat Folder...</span>
+                      <span className="text-[10px] text-indigo-400">Membaca file PDF...</span>
+                    </>
+                  ) : (
+                    <>
+                      <FolderOpen className="w-6 h-6 text-indigo-400 group-hover:scale-110 transition mb-1" />
+                      <span className="text-xs font-semibold">📁 Pilih Folder</span>
+                      <span className="text-[10px] text-slate-400">Baca seluruh PDF</span>
+                    </>
+                  )}
                 </button>
 
                 <button
@@ -2075,7 +2241,7 @@ export default function App() {
                   <button
                     type="button"
                     disabled={excelBatchItems.length === 0}
-                    onClick={handleExecuteBatchPdfToExcel}
+                    onClick={() => startBatchPdfToExcelExecution()}
                     className="w-full bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 disabled:opacity-40 text-white font-bold py-2.5 rounded-lg shadow-md transition flex items-center justify-center gap-2 text-xs"
                   >
                     <Play className="w-4 h-4" />
@@ -2226,8 +2392,6 @@ export default function App() {
                   className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-white placeholder-slate-500"
                 />
               </div>
-
-              </div>
             </aside>
 
             {/* Right Pane: Realtime Batch Status & Data Preview */}
@@ -2286,6 +2450,17 @@ export default function App() {
                   </div>
                 )}
               </div>
+
+              {/* Folder Loading Spinner Overlay Banner */}
+              {isLoadingFolder && (
+                <div className="bg-indigo-950/80 border border-indigo-500/50 rounded-xl p-4 flex items-center justify-center gap-3 shadow-lg flex-shrink-0 animate-pulse">
+                  <Loader2 className="w-6 h-6 text-indigo-400 animate-spin" />
+                  <div>
+                    <p className="text-xs font-bold text-indigo-200">Membaca & Menyiapkan File PDF dari Folder...</p>
+                    <p className="text-[10px] text-indigo-400">Menyusun file dari urutan terakhir ke terawal...</p>
+                  </div>
+                </div>
+              )}
 
               {/* Realtime Progress Bar */}
               {isExtractingExcel && (

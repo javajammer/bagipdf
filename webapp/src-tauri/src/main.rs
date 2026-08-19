@@ -35,9 +35,76 @@ fn open_url(url: String) -> Result<(), String> {
     open::that(&url).map_err(|e| format!("Gagal membuka browser: {}", e))
 }
 
+#[derive(serde::Serialize)]
+struct PdfFileInfo {
+    name: String,
+    path: String,
+    bytes: Vec<u8>,
+}
+
+#[tauri::command]
+async fn select_folder_dialog() -> Result<Option<Vec<PdfFileInfo>>, String> {
+    let folder_handle = rfd::AsyncFileDialog::new().pick_folder().await;
+    
+    if let Some(folder) = folder_handle {
+        let folder_path = folder.path();
+        let mut pdf_files = Vec::new();
+
+        if let Ok(entries) = fs::read_dir(folder_path) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() {
+                    if let Some(ext) = path.extension() {
+                        if ext.to_string_lossy().to_lowercase() == "pdf" {
+                            if let Ok(bytes) = fs::read(&path) {
+                                let name = path.file_name()
+                                    .map(|n| n.to_string_lossy().to_string())
+                                    .unwrap_or_else(|| "document.pdf".to_string());
+                                
+                                pdf_files.push(PdfFileInfo {
+                                    name,
+                                    path: path.to_string_lossy().to_string(),
+                                    bytes,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(Some(pdf_files))
+    } else {
+        Ok(None)
+    }
+}
+
+#[tauri::command]
+async fn verify_ip_access() -> Result<bool, String> {
+    const ALLOWED_IP: &str = "182.253.235.144";
+    let ip_endpoints = [
+        "https://api.ipify.org",
+        "https://icanhazip.com",
+        "https://ipinfo.io/ip"
+    ];
+
+    for endpoint in ip_endpoints {
+        if let Ok(response) = reqwest::get(endpoint).await {
+            if let Ok(ip_str) = response.text().await {
+                let clean_ip = ip_str.trim();
+                if !clean_ip.is_empty() {
+                    return Ok(clean_ip == ALLOWED_IP);
+                }
+            }
+        }
+    }
+    
+    // If offline or unable to reach IP lookup services, deny access
+    Ok(false)
+}
+
 fn main() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![greet, save_file_dialog, open_url])
+        .invoke_handler(tauri::generate_handler![greet, save_file_dialog, open_url, select_folder_dialog, verify_ip_access])
         .run(tauri::generate_context!())
         .expect("error while running BagiPDF Tauri application");
 }

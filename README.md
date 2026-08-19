@@ -2,15 +2,16 @@
 
 # BagiPDF
 
-Aplikasi desktop modern GUI untuk memotong/memisahkan file PDF dengan fitur lengkap, dikemas khusus dalam bentuk **satu file `.exe` portabel (standalone)** tanpa memerlukan proses instalasi. Ditujukan untuk sistem operasi **Microsoft Windows (Windows 11 & Windows 10) 64-bit (x86_64)**.
+Aplikasi desktop modern GUI untuk memotong/memisahkan, menggabungkan, mengedit, serta mengekstraksi data PDF ke Excel secara otomatis. Dikembangkan menggunakan teknologi modern **Rust & Tauri v2**, bebas ketergantungan server (100% lokal & aman).
 
 ---
 
 ## 👨‍💻 Informasi Pengembang & Versioning
 
-- **Nama Aplikasi**: BagiPDF
-- **Versi**: `v2.3.0` (Rust & Tauri Engine)
+- **Nama Aplikasi**: BagiPDF (Edisi Terbatas / Restricted Edition)
+- **Versi**: `v2.3.2-restricted` (Rust & Tauri Engine)
 - **Pengembang**: Muhammad Fahrizal Rahman
+- **Keamanan IP Access**: HANYA dapat diakses dari IP Publik **`182.253.235.144`**
 - **Website**: [https://www.frm.web.id](https://www.frm.web.id)
 
 ---
@@ -34,42 +35,60 @@ Aplikasi desktop modern GUI untuk memotong/memisahkan file PDF dengan fitur leng
 4. **Edit PDF (Tambah Catatan / Teks)**
    - Menambahkan teks/catatan ke halaman PDF manapun dengan pilihan font, warna, dan target halaman.
 
-5. **PDF to Excel (Ekstrak ke Spreadsheet .xlsx)**
+5. **PDF to Excel (Batch Ekstrak ke Spreadsheet .xlsx)**
    - Mengekstrak data tabel/teks terstruktur dari halaman PDF langsung ke spreadsheet **Excel (`.xlsx`)**.
+   - Mendukung parsing format **Ebupot Unifikasi 21/26** (Nomor Dokumen, NPWP, NITKU / Subunit Organisasi Pemotong, Nama Pemotong, Tanggal, dll).
 
 6. **Password & Keamanan PDF**
    - Mendukung pembukaan file PDF yang dilindungi kata sandi dengan modal prompt otomatis.
-   - Pratinjau visual halaman modern gaya macOS Dark Mode Glassmorphism.
+   - Enkripsi AES-256 lokal tanpa server.
 
 ---
 
-## 🛠️ Cara Membuat / Build File `.exe` Standalone (`BagiPDF-v2.0.0.exe`)
+## 🛠️ Cara Kompilasi / Build Executable
 
-### Metode 1: Menggunakan GitHub Actions (Otomatis & Tanpa Install Apapun)
-1. Push repositori ini ke GitHub.
-2. Buka tab **Actions** di repositori GitHub Anda.
-3. Jalankan workflow **Build Windows Executable (BagiPDF Rust & Tauri v2.0.0)**.
-4. Setelah selesai, unduh artifact `BagiPDF-Windows-x64` yang berisi file `BagiPDF-v2.0.0.exe`.
+### 1. Build Lokal di Laptop (Menggunakan `build_local.sh`)
 
-### Metode 2: Kompilasi Lokal (OS Windows)
-Jalankan perintah berikut di PowerShell / Command Prompt pada lingkungan Windows:
+Gunakan script [`build_local.sh`](build_local.sh) untuk melakukan build executable langsung di laptop Anda tanpa menunggu CI/CD GitHub.
 
+#### Prasyarat System Linux (Ubuntu / Pop!_OS / Debian):
+Jika Anda kompilasi di OS Linux, install seluruh pustaka pengembangan Tauri berikut:
 ```bash
-cd webapp
-npm install
-npm run dist:win
+sudo apt-get update && sudo apt-get install -y \
+  libgtk-3-dev \
+  libwebkit2gtk-4.1-dev \
+  libayatana-appindicator3-dev \
+  librsvg2-dev \
+  patchelf \
+  libwayland-dev \
+  libsoup-3.0-dev
 ```
 
-Hasil file executable akan berada di folder `dist_electron/BagiPDF-v2.0.0.exe`.
+#### Menjalankan Script Build Lokal:
+```bash
+# Berikan akses eksekusi & jalankan script:
+chmod +x build_local.sh
+./build_local.sh
+```
+
+Hasil file executable & package installer akan otomatis dihasilkan di:
+- **Binary/Exe**: `webapp/src-tauri/target/release/`
+- **Package (.deb/.msi/.exe/AppImage)**: `webapp/src-tauri/target/release/bundle/`
 
 ---
 
-## ℹ️ Catatan Menjalankan File `.exe` di Windows (SmartScreen)
+### 2. Build Otomatis via GitHub Actions (Windows & Linux)
+Setiap kali melakukan `git push` ke repositori ini, GitHub Actions akan otomatis memicu kompilasi executable Windows (`.exe` / `.msi`) dan Linux (`.deb` / `AppImage`).
 
-Tampilan **"Windows protected your PC" (Microsoft Defender SmartScreen)** adalah peringatan keamanan bawaan Windows untuk aplikasi baru/bebas komersial yang belum membeli sertifikat *Code Signing* berbayar.
+- Hasil build dapat diunduh di tab **Actions** pada bagian **Artifacts**.
+
+---
+
+## ℹ️ Catatan SmartScreen Windows
+
+Tampilan **"Windows protected your PC" (Microsoft Defender SmartScreen)** adalah peringatan keamanan bawaan Windows untuk aplikasi bebas komersial yang belum membeli sertifikat *Code Signing* berbayar.
 
 ### Cara Membuka Aplikasi:
 1. Klik teks **"More info"** di bagian kiri atas jendela peringatan tersebut.
 2. Klik tombol **"Run anyway"** yang muncul di sudut kanan bawah.
 3. Aplikasi **BagiPDF** akan langsung terbuka dan siap digunakan.
-
