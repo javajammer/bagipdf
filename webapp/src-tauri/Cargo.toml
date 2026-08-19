@@ -1,6 +1,6 @@
 [package]
 name = "bagipdf"
-version = "2.3.2-restricted"
+version = "2.3.2"
 description = "BagiPDF - High Performance Portable PDF Tool in Rust & Tauri"
 authors = ["Muhammad Fahrizal Rahman"]
 edition = "2021"
