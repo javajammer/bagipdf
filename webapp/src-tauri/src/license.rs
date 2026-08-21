@@ -3,16 +3,21 @@ use aes_gcm::{
     Aes256Gcm, Key, Nonce,
 };
 use base64::Engine;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use hmac::{Hmac, Mac};
+use native_tls::TlsConnector;
+use postgres_native_tls::MakeTlsConnector;
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::PathBuf;
 use tauri::Manager;
+use tokio_postgres::Client;
 
 type HmacSha256 = Hmac<Sha256>;
 
-// APP_SECRET bytes — XOR obfuscated (same as CLI tool)
+const NEON_DB_URL: &str = "postgresql://neondb_owner:npg_fUByRKpo6sF1@ep-morning-frog-azz98qvs-pooler.c-3.ap-southeast-1.aws.neon.tech/neondb?sslmode=require";
+
+// APP_SECRET bytes — XOR obfuscated
 const SECRET_XOR: &[u8] = &[
     0x0b, 0x23, 0x08, 0x3b, 0x14, 0x0e, 0x0f, 0x7c,
     0x2b, 0x57, 0x5e, 0x7e, 0x10, 0x1f, 0x62, 0x05,
@@ -39,7 +44,6 @@ pub struct LicenseInfo {
     pub message: String,
 }
 
-/// Path file lisensi di app data dir
 fn license_path(app_handle: &tauri::AppHandle) -> PathBuf {
     app_handle
         .path()
@@ -48,7 +52,6 @@ fn license_path(app_handle: &tauri::AppHandle) -> PathBuf {
         .join("license.lic")
 }
 
-/// AES-256-GCM key dari machine_key (deterministik)
 fn derive_enc_key(machine_key: &str) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(b"BagiPDF-LIC-ENC-V1:");
@@ -56,76 +59,81 @@ fn derive_enc_key(machine_key: &str) -> [u8; 32] {
     hasher.finalize().into()
 }
 
-/// Verifikasi token tanpa menyimpan — return (valid, expiry_epoch, username)
-fn verify_token_internal(token: &str, machine_key: &str, username: &str) -> Result<i64, String> {
-    let stripped = token.trim().replace("BPDF-", "").replace("-", "");
-    if stripped.len() < 28 {
-        return Err("Format token tidak valid".to_string());
-    }
+async fn get_db_client() -> Result<Client, String> {
+    let builder = TlsConnector::builder();
+    let connector = builder.build().map_err(|e| format!("TLS init error: {}", e))?;
+    let tls = MakeTlsConnector::new(connector);
 
-    let epoch_hex = &stripped[0..8];
-    let epoch_u32 = u32::from_str_radix(epoch_hex, 16)
-        .map_err(|_| "Token corrupt (epoch)".to_string())?;
+    let (client, connection) = tokio_postgres::connect(NEON_DB_URL, tls)
+        .await
+        .map_err(|e| format!("Gagal terhubung ke Neon Database: {}", e))?;
 
-    let now_epoch = Utc::now().timestamp();
-    let base = (now_epoch & (0xFFFF_FFFF_0000_0000_u64 as i64)) | (epoch_u32 as i64);
-    let expiry_epoch = if base < now_epoch - 2 * 365 * 86400 {
-        base + 0x1_0000_0000_i64
-    } else {
-        base
-    };
+    tokio::spawn(async move {
+        if let Err(e) = connection.await {
+            eprintln!("DB connection error: {}", e);
+        }
+    });
 
-    // Verify HMAC
-    let message = format!("{}||{}||{}", machine_key, username, expiry_epoch);
-    let secret = get_app_secret();
-    let mut mac = <HmacSha256 as Mac>::new_from_slice(&secret).expect("HMAC init failed");
-    Mac::update(&mut mac, message.as_bytes());
-    let expected = mac.finalize().into_bytes();
-    let expected_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(expected);
-    let expected_payload: String = expected_b64.chars().take(20).collect();
-    let expected_combined = format!("{}{}", epoch_hex, expected_payload);
-
-    if stripped != expected_combined {
-        return Err("Token tidak valid untuk perangkat ini. Pastikan Machine Key sesuai.".to_string());
-    }
-
-    if now_epoch > expiry_epoch {
-        return Err(format!(
-            "Token sudah kadaluarsa. Hubungi admin untuk token baru."
-        ));
-    }
-
-    Ok(expiry_epoch)
+    Ok(client)
 }
 
-/// Aktivasi lisensi — verifikasi token dan simpan ke disk (encrypted)
-pub fn activate_license(
+/// Verifikasi Lisensi langsung ke Neon PostgreSQL DB
+pub async fn verify_online_license(
     app_handle: &tauri::AppHandle,
-    token: &str,
-    username: &str,
-    machine_key: &str,
+    email: &str,
+    license_key: &str,
+    current_machine_key: &str,
 ) -> Result<LicenseInfo, String> {
-    // 1. Verifikasi token
-    let expiry_epoch = verify_token_internal(token, machine_key, username)?;
-    let expires_at = chrono::DateTime::<Utc>::from_timestamp(expiry_epoch, 0)
-        .ok_or("Timestamp tidak valid")?;
+    let email_clean = email.trim().to_lowercase();
+    let key_clean = license_key.trim().to_uppercase();
 
-    // 2. Payload yang akan disimpan
+    // 1. Query Neon DB
+    let client = get_db_client().await?;
+    let rows = client.query(
+        "SELECT email, machine_key, license_key, is_active, expires_at 
+         FROM licenses WHERE LOWER(email) = $1 AND license_key = $2 LIMIT 1",
+        &[&email_clean, &key_clean],
+    ).await.map_err(|e| format!("Gagal query ke Neon DB: {}", e))?;
+
+    if rows.is_empty() {
+        return Err("License-key atau Email tidak ditemukan / tidak valid. Silakan beli lisensi baru.".to_string());
+    }
+
+    let row = &rows[0];
+    let db_machine_key: String = row.get(1);
+    let is_active: bool = row.get(3);
+    let expires_at: DateTime<Utc> = row.get(4);
+
+    // 2. Verifikasi 1: Flag Status di Database
+    if !is_active {
+        return Err("Lisensi Anda telah dinonaktifkan oleh admin. Silakan hubungi support / beli lisensi baru.".to_string());
+    }
+
+    // 3. Verifikasi 2: Masa berlaku
+    let now = Utc::now();
+    if now > expires_at {
+        return Err(format!("Lisensi Anda telah kadaluarsa pada {}. Silakan perbarui lisensi.", expires_at.format("%d %B %Y")));
+    }
+
+    // 4. Verifikasi 3: Pengecekan Perangkat Keras (Hardware Fingerprint Match)
+    if db_machine_key != current_machine_key {
+        return Err("Penolakan Akses: License Key ini terikat pada perangkat lain! Perangkat keras Anda tidak cocok.".to_string());
+    }
+
+    // 5. Jika semua cocok: Simpan Cache Lokal Terenkripsi (AES-256-GCM)
     let payload = format!(
         "{}||{}||{}||{}",
-        username, machine_key, expiry_epoch, token
+        email_clean, current_machine_key, expires_at.timestamp(), key_clean
     );
 
-    // 3. Encrypt dengan AES-256-GCM
-    let enc_key_bytes = derive_enc_key(machine_key);
+    let enc_key_bytes = derive_enc_key(current_machine_key);
     let enc_key = Key::<Aes256Gcm>::from_slice(&enc_key_bytes);
     let cipher = Aes256Gcm::new(enc_key);
     let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
     let ciphertext = cipher
         .encrypt(&nonce, payload.as_bytes())
-        .map_err(|e| format!("Enkripsi gagal: {}", e))?;
+        .map_err(|e| format!("Enkripsi cache lisensi gagal: {}", e))?;
 
-    // 4. Simpan: nonce (12 bytes) + ciphertext sebagai base64
     let mut combined = nonce.to_vec();
     combined.extend_from_slice(&ciphertext);
     let encoded = base64::engine::general_purpose::STANDARD.encode(&combined);
@@ -134,22 +142,21 @@ pub fn activate_license(
     if let Some(parent) = lic_path.parent() {
         fs::create_dir_all(parent).ok();
     }
-    fs::write(&lic_path, &encoded).map_err(|e| format!("Gagal menyimpan lisensi: {}", e))?;
+    fs::write(&lic_path, &encoded).map_err(|e| format!("Gagal menyimpan cache lisensi: {}", e))?;
 
-    let now = Utc::now();
     let days_remaining = (expires_at - now).num_days();
 
     Ok(LicenseInfo {
         valid: true,
-        username: username.to_string(),
+        username: email_clean,
         expires_at: expires_at.format("%Y-%m-%d").to_string(),
         days_remaining,
-        message: format!("Lisensi aktif. Berlaku hingga {}", expires_at.format("%d %B %Y")),
+        message: format!("Verifikasi Neon DB Sukses! Lisensi aktif hingga {}", expires_at.format("%d %B %Y")),
     })
 }
 
-/// Cek lisensi yang tersimpan — return status validity
-pub fn check_license(app_handle: &tauri::AppHandle, machine_key: &str) -> LicenseInfo {
+/// Cek Lisensi Lokal + Re-verify Neon DB jika online
+pub async fn check_license_hybrid(app_handle: &tauri::AppHandle, machine_key: &str) -> LicenseInfo {
     let not_valid = |msg: &str| LicenseInfo {
         valid: false,
         username: String::new(),
@@ -164,14 +171,13 @@ pub fn check_license(app_handle: &tauri::AppHandle, machine_key: &str) -> Licens
         Err(_) => return not_valid("Lisensi belum diaktifkan."),
     };
 
-    // Decrypt
     let combined = match base64::engine::general_purpose::STANDARD.decode(encoded.trim()) {
         Ok(v) => v,
         Err(_) => return not_valid("File lisensi corrupt."),
     };
 
     if combined.len() < 12 {
-        return not_valid("File lisensi terlalu pendek.");
+        return not_valid("File lisensi corrupt.");
     }
 
     let nonce = Nonce::from_slice(&combined[..12]);
@@ -183,7 +189,7 @@ pub fn check_license(app_handle: &tauri::AppHandle, machine_key: &str) -> Licens
 
     let plaintext = match cipher.decrypt(nonce, ciphertext) {
         Ok(p) => p,
-        Err(_) => return not_valid("Lisensi tidak valid untuk perangkat ini."),
+        Err(_) => return not_valid("Lisensi tidak valid untuk perangkat ini! Perangkat keras telah berubah."),
     };
 
     let payload = match String::from_utf8(plaintext) {
@@ -191,37 +197,47 @@ pub fn check_license(app_handle: &tauri::AppHandle, machine_key: &str) -> Licens
         Err(_) => return not_valid("Lisensi corrupt."),
     };
 
-    // Parse payload: username||machine_key||expiry_epoch||token
     let parts: Vec<&str> = payload.splitn(4, "||").collect();
-    if parts.len() < 3 {
-        return not_valid("Format lisensi tidak valid.");
+    if parts.len() < 4 {
+        return not_valid("Format cache lisensi tidak valid.");
     }
 
-    let username = parts[0];
+    let email = parts[0];
     let stored_machine_key = parts[1];
-    let expiry_epoch: i64 = match parts[2].parse() {
-        Ok(e) => e,
-        Err(_) => return not_valid("Lisensi corrupt (expiry)."),
-    };
+    let expiry_epoch: i64 = parts[2].parse().unwrap_or(0);
+    let license_key = parts[3];
 
-    // Pastikan machine_key cocok
+    // Hardware Mismatch Check
     if stored_machine_key != machine_key {
-        return not_valid("Lisensi bukan untuk perangkat ini.");
+        return not_valid("Lisensi ini terikat pada perangkat lain! Perangkat keras tidak cocok.");
+    }
+
+    // Cek Online Sync dengan Neon DB jika ada koneksi
+    if let Ok(db_client) = get_db_client().await {
+        if let Ok(rows) = db_client.query(
+            "SELECT is_active, expires_at, machine_key FROM licenses WHERE LOWER(email) = $1 AND license_key = $2 LIMIT 1",
+            &[&email, &license_key],
+        ).await {
+            if let Some(row) = rows.first() {
+                let is_active: bool = row.get(0);
+                let db_expires_at: DateTime<Utc> = row.get(1);
+                let db_machine_key: String = row.get(2);
+
+                if !is_active || db_machine_key != machine_key || Utc::now() > db_expires_at {
+                    // Hapus cache lisensi lokal jika di-disable di Neon DB!
+                    fs::remove_file(&lic_path).ok();
+                    return not_valid("Lisensi telah dinonaktifkan / tidak valid di Neon DB. Silakan beli lisensi baru.");
+                }
+            } else {
+                fs::remove_file(&lic_path).ok();
+                return not_valid("Lisensi tidak ditemukan di Neon DB.");
+            }
+        }
     }
 
     let now = Utc::now();
-    let now_epoch = now.timestamp();
-
-    if now_epoch > expiry_epoch {
-        return LicenseInfo {
-            valid: false,
-            username: username.to_string(),
-            expires_at: chrono::DateTime::<Utc>::from_timestamp(expiry_epoch, 0)
-                .map(|d| d.format("%Y-%m-%d").to_string())
-                .unwrap_or_default(),
-            days_remaining: 0,
-            message: "Lisensi sudah kadaluarsa. Hubungi admin untuk pembaruan.".to_string(),
-        };
+    if now.timestamp() > expiry_epoch {
+        return not_valid("Lisensi sudah kadaluarsa. Silakan perbarui lisensi Anda.");
     }
 
     let expires_at = chrono::DateTime::<Utc>::from_timestamp(expiry_epoch, 0).unwrap();
@@ -229,9 +245,9 @@ pub fn check_license(app_handle: &tauri::AppHandle, machine_key: &str) -> Licens
 
     LicenseInfo {
         valid: true,
-        username: username.to_string(),
+        username: email.to_string(),
         expires_at: expires_at.format("%Y-%m-%d").to_string(),
         days_remaining,
-        message: format!("Lisensi aktif untuk {}. Berlaku {} hari lagi.", username, days_remaining),
+        message: format!("Lisensi aktif untuk {}. Berlaku {} hari lagi.", email, days_remaining),
     }
 }

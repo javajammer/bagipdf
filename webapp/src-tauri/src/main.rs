@@ -113,22 +113,22 @@ fn get_machine_key() -> serde_json::Value {
     })
 }
 
-/// Aktivasi lisensi Ebupot dengan token dari admin
+/// Verifikasi & Aktivasi Lisensi Ebupot ke Neon DB
 #[tauri::command]
 async fn activate_ebupot_license(
     app_handle: tauri::AppHandle,
     token: String,
     username: String,
 ) -> Result<license::LicenseInfo, String> {
-    let machine_key = fingerprint::collect_machine_key();
-    license::activate_license(&app_handle, &token, &username, &machine_key)
+    let current_machine_key = fingerprint::collect_machine_key();
+    license::verify_online_license(&app_handle, &username, &token, &current_machine_key).await
 }
 
-/// Cek status lisensi Ebupot yang tersimpan
+/// Cek status lisensi Ebupot (hybrid: local cache + Neon DB sync)
 #[tauri::command]
-fn check_ebupot_license(app_handle: tauri::AppHandle) -> license::LicenseInfo {
-    let machine_key = fingerprint::collect_machine_key();
-    license::check_license(&app_handle, &machine_key)
+async fn check_ebupot_license(app_handle: tauri::AppHandle) -> license::LicenseInfo {
+    let current_machine_key = fingerprint::collect_machine_key();
+    license::check_license_hybrid(&app_handle, &current_machine_key).await
 }
 
 fn main() {

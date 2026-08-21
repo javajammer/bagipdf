@@ -23,6 +23,10 @@ dirs        = "5"
 # Hardware fingerprint
 sysinfo     = "0.32"
 mac_address = "1.1"
+tokio       = { version = "1", features = ["full"] }
+tokio-postgres = { version = "0.7", features = ["with-chrono-0_4"] }
+native-tls  = "0.2"
+postgres-native-tls = "0.5"
 
 [profile.release]
 opt-level = "z"

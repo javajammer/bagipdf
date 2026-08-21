@@ -1,18 +1,18 @@
 mod fingerprint;
 mod history;
 mod keygen;
+mod db;
 
 use chrono::Utc;
 use clap::{Parser, Subcommand};
-use history::HistoryEntry;
 
-/// BagiPDF Admin CLI — Kelola lisensi akses menu Ebupot
+/// BagiPDF Admin CLI — Kelola lisensi akses menu Ebupot (Neon DB Integrated)
 #[derive(Parser)]
 #[command(
     name = "bagipdf-admin",
-    version = "1.0.0",
+    version = "2.0.0",
     author = "Muhammad Fahrizal Rahman",
-    about = "Admin tool untuk generate & track token lisensi Ebupot BagiPDF"
+    about = "Admin tool untuk mengaktifkan & mengelola lisensi Ebupot BagiPDF di Neon DB"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -21,12 +21,12 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Generate token lisensi baru untuk user
+    /// Aktifkan lisensi user di Neon DB (Flag IS_ACTIVE = TRUE)
     Activate {
-        /// Nama user (contoh: santi, budi, PT_MAJU)
+        /// Alamat email user (contoh: santi@gmail.com)
         #[arg(short, long)]
-        user: String,
-        /// Machine Key dari perangkat user (dikirim via WhatsApp)
+        email: String,
+        /// Machine Key perangkat user (dikirim via Email/WA)
         #[arg(short, long)]
         machine_key: String,
         /// Durasi lisensi dalam hari (default: 365)
@@ -36,270 +36,173 @@ enum Commands {
         #[arg(short, long)]
         notes: Option<String>,
     },
-    /// Tampilkan semua riwayat lisensi
+    /// Nonaktifkan / Matikan flag lisensi user di Neon DB (Flag IS_ACTIVE = FALSE)
+    Disable {
+        /// Alamat email user yang akan dimatikan lisensinya
+        #[arg(short, long)]
+        email: String,
+    },
+    /// Tampilkan semua lisensi aktif/revoked/expired di Neon DB
     List {
         /// Filter berdasarkan status (active/revoked/expired/semua)
         #[arg(short, long, default_value = "semua")]
         status: String,
     },
-    /// Cek status lisensi user tertentu
+    /// Cek status lisensi user tertentu di Neon DB
     Check {
-        /// Nama user yang ingin dicek
+        /// Email user yang ingin dicek
         #[arg(short, long)]
-        user: String,
-    },
-    /// Verifikasi token yang diberikan user (cek apakah valid)
-    Verify {
-        /// Nama user
-        #[arg(short, long)]
-        user: String,
-        /// Machine Key user
-        #[arg(short, long)]
-        machine_key: String,
-        /// Token yang ingin diverifikasi
-        #[arg(short, long)]
-        token: String,
-    },
-    /// Cabut (revoke) akses user
-    Revoke {
-        /// Nama user yang ingin dicabut aksesnya
-        #[arg(short, long)]
-        user: String,
+        email: String,
     },
     /// Generate Machine Key dari perangkat ini (untuk testing)
     Fingerprint,
-    /// Tampilkan lokasi file history
-    Info,
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let cli = Cli::parse();
     println!();
 
     match cli.command {
-        Commands::Activate { user, machine_key, duration, notes } => {
-            cmd_activate(&user, &machine_key, duration, notes);
+        Commands::Activate { email, machine_key, duration, notes } => {
+            cmd_activate(&email, &machine_key, duration, notes.as_deref()).await;
+        }
+        Commands::Disable { email } => {
+            cmd_disable(&email).await;
         }
         Commands::List { status } => {
-            cmd_list(&status);
+            cmd_list(&status).await;
         }
-        Commands::Check { user } => {
-            cmd_check(&user);
-        }
-        Commands::Verify { user, machine_key, token } => {
-            cmd_verify(&user, &machine_key, &token);
-        }
-        Commands::Revoke { user } => {
-            cmd_revoke(&user);
+        Commands::Check { email } => {
+            cmd_check(&email).await;
         }
         Commands::Fingerprint => {
             cmd_fingerprint();
         }
-        Commands::Info => {
-            cmd_info();
-        }
     }
 
     println!();
 }
 
-fn cmd_activate(user: &str, machine_key: &str, duration: i64, notes: Option<String>) {
+async fn cmd_activate(email: &str, machine_key: &str, duration: i64, notes: Option<&str>) {
     println!("╔══════════════════════════════════════════════════╗");
-    println!("║         🔑 GENERATE TOKEN LISENSI EBUPOT         ║");
+    println!("║       🔑 AKTIFKAN LISENSI NEON DB (EBUPOT)       ║");
     println!("╚══════════════════════════════════════════════════╝");
     println!();
-    println!("  User         : {}", user);
+    println!("  Email        : {}", email);
     println!("  Machine Key  : {}...", &machine_key[..machine_key.len().min(16)]);
     println!("  Durasi       : {} hari", duration);
+    println!("  Menghubungi Neon DB...");
 
-    // Cek apakah user sudah punya lisensi aktif
-    let history = history::load_history();
-    let existing = history.iter().find(|e| {
-        e.user.to_lowercase() == user.to_lowercase()
-            && e.machine_key == machine_key
-            && e.status == "active"
-    });
+    // Generate license_key HMAC
+    let (license_key, _) = keygen::generate_token(machine_key, email, duration);
 
-    if let Some(existing) = existing {
-        println!();
-        println!("  ⚠️  User ini sudah punya lisensi aktif!");
-        println!("  Token lama  : {}", existing.token);
-        println!("  Kadaluarsa  : {}", existing.expires_at.format("%Y-%m-%d"));
-        println!();
-        print!("  Lanjutkan generate ulang? (y/N): ");
-        use std::io::{self, Write};
-        io::stdout().flush().ok();
-        let mut input = String::new();
-        io::stdin().read_line(&mut input).ok();
-        if !input.trim().to_lowercase().starts_with('y') {
-            println!("  Dibatalkan.");
-            return;
-        }
-    }
-
-    // Generate token
-    let (token, expires_at) = keygen::generate_token(machine_key, user, duration);
-
-    println!();
-    println!("  ✅ TOKEN BERHASIL DIGENERATE:");
-    println!();
-    println!("  ┌─────────────────────────────────────────────┐");
-    println!("  │  {}  │", token);
-    println!("  └─────────────────────────────────────────────┘");
-    println!();
-    println!("  Berlaku s/d  : {}", expires_at.format("%d %B %Y"));
-    println!("  Kadaluarsa   : {} hari lagi", duration);
-    println!();
-    println!("  📱 Kirim token di atas ke user via WhatsApp.");
-
-    // Simpan ke history
-    let entry = HistoryEntry {
-        user: user.to_string(),
-        machine_key: machine_key.to_string(),
-        token,
-        issued_at: Utc::now(),
-        expires_at,
-        status: "active".to_string(),
-        duration_days: duration,
-        notes,
-    };
-    history::add_entry(entry);
-    println!("  💾 History disimpan ke: {}", history::history_path_display());
-}
-
-fn cmd_list(filter_status: &str) {
-    println!("╔══════════════════════════════════════════════════╗");
-    println!("║          📋 RIWAYAT LISENSI EBUPOT               ║");
-    println!("╚══════════════════════════════════════════════════╝");
-    println!();
-
-    let mut history = history::load_history();
-
-    // Update status expired
-    let now = Utc::now();
-    for entry in &mut history {
-        if entry.status == "active" && now > entry.expires_at {
-            entry.status = "expired".to_string();
-        }
-    }
-    history::save_history(&history);
-
-    let filtered: Vec<_> = history.iter().filter(|e| {
-        filter_status == "semua" || e.status == filter_status
-    }).collect();
-
-    if filtered.is_empty() {
-        println!("  (Tidak ada data)");
-        return;
-    }
-
-    println!("  {:<15} {:<12} {:<12} {:<10} {}",
-        "USER", "STATUS", "BERLAKU S/D", "DURASI", "TOKEN");
-    println!("  {}", "─".repeat(75));
-
-    for entry in &filtered {
-        let status_icon = match entry.status.as_str() {
-            "active" => "✅ active ",
-            "revoked" => "🚫 revoked",
-            _ => "⏰ expired",
-        };
-        println!("  {:<15} {} {:<12} {:<5} hari  {}",
-            entry.user,
-            status_icon,
-            entry.expires_at.format("%Y-%m-%d"),
-            entry.duration_days,
-            entry.token
-        );
-        if let Some(notes) = &entry.notes {
-            println!("  {:<15}              Catatan: {}", "", notes);
-        }
-    }
-
-    println!();
-    println!("  Total: {} lisensi", filtered.len());
-}
-
-fn cmd_check(user: &str) {
-    println!("╔══════════════════════════════════════════════════╗");
-    println!("║            🔍 CEK STATUS LISENSI                 ║");
-    println!("╚══════════════════════════════════════════════════╝");
-    println!();
-
-    let history = history::load_history();
-    let entries: Vec<_> = history.iter()
-        .filter(|e| e.user.to_lowercase() == user.to_lowercase())
-        .collect();
-
-    if entries.is_empty() {
-        println!("  ❌ User '{}' tidak ditemukan dalam history.", user);
-        return;
-    }
-
-    for entry in &entries {
-        let now = Utc::now();
-        let is_expired = now > entry.expires_at;
-        let effective_status = if entry.status == "active" && is_expired {
-            "expired"
-        } else {
-            &entry.status
-        };
-
-        println!("  User          : {}", entry.user);
-        println!("  Machine Key   : {}...", &entry.machine_key[..entry.machine_key.len().min(20)]);
-        println!("  Token         : {}", entry.token);
-        println!("  Diterbitkan   : {}", entry.issued_at.format("%d %B %Y %H:%M UTC"));
-        println!("  Kadaluarsa    : {}", entry.expires_at.format("%d %B %Y"));
-        println!("  Status        : {}", match effective_status {
-            "active" => "✅ AKTIF",
-            "revoked" => "🚫 DICABUT",
-            _ => "⏰ KADALUARSA",
-        });
-        if effective_status == "active" {
-            let remaining = entry.expires_at - now;
-            println!("  Sisa          : {} hari", remaining.num_days());
-        }
-        if let Some(notes) = &entry.notes {
-            println!("  Catatan       : {}", notes);
-        }
-        println!();
-    }
-}
-
-fn cmd_verify(user: &str, machine_key: &str, token: &str) {
-    println!("╔══════════════════════════════════════════════════╗");
-    println!("║           ✔️  VERIFIKASI TOKEN                    ║");
-    println!("╚══════════════════════════════════════════════════╝");
-    println!();
-
-    match keygen::verify_token(token, machine_key, user) {
-        Ok(payload) => {
-            println!("  ✅ Token VALID!");
+    match db::db_upsert_license(email, machine_key, &license_key, duration, notes).await {
+        Ok(expires_at) => {
             println!();
-            println!("  User          : {}", payload.username);
-            println!("  Machine Key   : {}...", &payload.machine_key[..payload.machine_key.len().min(20)]);
-            println!("  Kadaluarsa    : {}", payload.expires_at.format("%d %B %Y"));
-            let remaining = payload.expires_at - Utc::now();
-            println!("  Sisa          : {} hari", remaining.num_days());
+            println!("  ✅ LISENSI BERHASIL DIAKTIFKAN & FLAG NEON DB = ENABLED!");
+            println!();
+            println!("  ┌─────────────────────────────────────────────┐");
+            println!("  │  User License Key:                           │");
+            println!("  │  {}  │", license_key);
+            println!("  └─────────────────────────────────────────────┘");
+            println!();
+            println!("  Berlaku s/d  : {}", expires_at.format("%d %B %Y"));
+            println!();
+            println!("  📱 Berikan Email ({}) & License Key di atas ke pelanggan.", email);
         }
         Err(e) => {
-            println!("  ❌ Token TIDAK VALID!");
             println!();
-            println!("  Alasan: {}", e);
+            println!("  ❌ GAGAL AKTIFKAN LISENSI DI NEON DB:");
+            println!("     {}", e);
         }
     }
 }
 
-fn cmd_revoke(user: &str) {
+async fn cmd_disable(email: &str) {
     println!("╔══════════════════════════════════════════════════╗");
-    println!("║             🚫 REVOKE AKSES USER                 ║");
+    println!("║      🚫 MATIKAN FLAG LISENSI NEON DB (DISABLE)   ║");
+    println!("╚══════════════════════════════════════════════════╝");
+    println!();
+    println!("  Email        : {}", email);
+    println!("  Mengubah flag IS_ACTIVE = FALSE di Neon DB...");
+
+    match db::db_toggle_license_status(email, false).await {
+        Ok(true) => {
+            println!();
+            println!("  ✅ Lisensi untuk '{}' BERHASIL DIMATIKAN (DISABLED)!", email);
+            println!("  Aplikasi BagiPDF desktop milik user tidak akan bisa membuka menu Ebupot.");
+        }
+        Ok(false) => {
+            println!();
+            println!("  ⚠️ Email '{}' tidak ditemukan di Neon DB.", email);
+        }
+        Err(e) => {
+            println!();
+            println!("  ❌ Gagal mengubah status di Neon DB: {}", e);
+        }
+    }
+}
+
+async fn cmd_list(filter_status: &str) {
+    println!("╔══════════════════════════════════════════════════╗");
+    println!("║          📋 DAFTAR LISENSI NEON DB               ║");
     println!("╚══════════════════════════════════════════════════╝");
     println!();
 
-    if history::revoke_user(user) {
-        println!("  ✅ Akses user '{}' berhasil dicabut.", user);
-        println!("  Catatan: User perlu memasukkan token baru untuk aktivasi ulang.");
-    } else {
-        println!("  ❌ User '{}' tidak ditemukan atau tidak memiliki lisensi aktif.", user);
+    match db::db_list_licenses(filter_status).await {
+        Ok(records) => {
+            if records.is_empty() {
+                println!("  (Tidak ada data lisensi)");
+                return;
+            }
+            println!("  {:<25} {:<12} {:<12} {}", "EMAIL", "STATUS", "EXPIRES AT", "LICENSE KEY");
+            println!("  {}", "─".repeat(75));
+
+            for r in &records {
+                let status_str = if r.is_active && Utc::now() <= r.expires_at {
+                    "✅ ENABLED "
+                } else if !r.is_active {
+                    "🚫 DISABLED"
+                } else {
+                    "⏰ EXPIRED "
+                };
+                println!("  {:<25} {} {:<12} {}",
+                    r.email, status_str, r.expires_at.format("%Y-%m-%d"), r.license_key
+                );
+            }
+            println!();
+            println!("  Total: {} record", records.len());
+        }
+        Err(e) => {
+            println!("  ❌ Gagal fetch data dari Neon DB: {}", e);
+        }
+    }
+}
+
+async fn cmd_check(email: &str) {
+    println!("╔══════════════════════════════════════════════════╗");
+    println!("║         🔍 CEK LISENSI USER NEON DB              ║");
+    println!("╚══════════════════════════════════════════════════╝");
+    println!();
+
+    match db::db_get_user_license(email).await {
+        Ok(Some(r)) => {
+            let now = Utc::now();
+            let is_valid = r.is_active && now <= r.expires_at;
+            println!("  Email        : {}", r.email);
+            println!("  Machine Key  : {}...", &r.machine_key[..r.machine_key.len().min(20)]);
+            println!("  License Key  : {}", r.license_key);
+            println!("  Expires At   : {}", r.expires_at.format("%d %B %Y"));
+            println!("  Flag DB      : {}", if r.is_active { "ENABLED (TRUE)" } else { "DISABLED (FALSE)" });
+            println!("  Status Final : {}", if is_valid { "✅ AKTIF & VALID" } else { "❌ TIDAK VALID / MATI" });
+        }
+        Ok(None) => {
+            println!("  ❌ Email '{}' tidak ditemukan di Neon DB.", email);
+        }
+        Err(e) => {
+            println!("  ❌ Error DB: {}", e);
+        }
     }
 }
 
@@ -308,31 +211,8 @@ fn cmd_fingerprint() {
     println!("║          🖥️  MACHINE KEY PERANGKAT INI            ║");
     println!("╚══════════════════════════════════════════════════╝");
     println!();
-    println!("  Mengumpulkan data hardware...");
-
     let raw_key = fingerprint::collect_machine_key();
     let display_key = fingerprint::format_machine_key_display(&raw_key);
-
-    println!();
     println!("  Machine Key (Full)    : {}", raw_key);
     println!("  Machine Key (Display) : {}", display_key);
-    println!();
-    println!("  Gunakan Machine Key (Full) saat generate token.");
-}
-
-fn cmd_info() {
-    println!("╔══════════════════════════════════════════════════╗");
-    println!("║              ℹ️  INFORMASI SISTEM                  ║");
-    println!("╚══════════════════════════════════════════════════╝");
-    println!();
-    println!("  History file  : {}", history::history_path_display());
-    println!("  Tool version  : 1.0.0");
-    println!("  App target    : BagiPDF v2.3.x");
-    println!();
-    println!("  Contoh penggunaan:");
-    println!("  $ ./bagipdf-admin activate --user santi --machine-key <KEY> --duration 365");
-    println!("  $ ./bagipdf-admin list");
-    println!("  $ ./bagipdf-admin check --user santi");
-    println!("  $ ./bagipdf-admin revoke --user santi");
-    println!("  $ ./bagipdf-admin fingerprint");
 }

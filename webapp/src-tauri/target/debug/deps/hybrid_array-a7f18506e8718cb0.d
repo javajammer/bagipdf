@@ -1,0 +1,11 @@
+/home/rizal/Documents/PersonalAI/pdfSplit/webapp/src-tauri/target/debug/deps/hybrid_array-a7f18506e8718cb0.d: /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hybrid-array-0.4.14/src/lib.rs /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hybrid-array-0.4.14/src/sizes.rs /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hybrid-array-0.4.14/src/flatten.rs /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hybrid-array-0.4.14/src/from_fn.rs /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hybrid-array-0.4.14/src/iter.rs /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hybrid-array-0.4.14/src/traits.rs /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hybrid-array-0.4.14/src/../README.md
+
+/home/rizal/Documents/PersonalAI/pdfSplit/webapp/src-tauri/target/debug/deps/libhybrid_array-a7f18506e8718cb0.rmeta: /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hybrid-array-0.4.14/src/lib.rs /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hybrid-array-0.4.14/src/sizes.rs /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hybrid-array-0.4.14/src/flatten.rs /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hybrid-array-0.4.14/src/from_fn.rs /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hybrid-array-0.4.14/src/iter.rs /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hybrid-array-0.4.14/src/traits.rs /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hybrid-array-0.4.14/src/../README.md
+
+/home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hybrid-array-0.4.14/src/lib.rs:
+/home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hybrid-array-0.4.14/src/sizes.rs:
+/home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hybrid-array-0.4.14/src/flatten.rs:
+/home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hybrid-array-0.4.14/src/from_fn.rs:
+/home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hybrid-array-0.4.14/src/iter.rs:
+/home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hybrid-array-0.4.14/src/traits.rs:
+/home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hybrid-array-0.4.14/src/../README.md:

@@ -2216,24 +2216,24 @@ export default function App() {
                     </p>
                   </div>
 
-                  {/* Username Input */}
+                  {/* Email Input */}
                   <div>
                     <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block mb-1.5">
-                      Nama Pengguna
+                      Alamat Email Terdaftar
                     </label>
                     <input
-                      type="text"
+                      type="email"
                       value={ebupotActivationUsername}
                       onChange={e => setEbupotActivationUsername(e.target.value)}
-                      placeholder="Contoh: santi, budi, PT Maju Jaya..."
+                      placeholder="Contoh: santi@gmail.com"
                       className="w-full bg-slate-950/80 border border-slate-700/60 rounded-lg px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
                     />
                   </div>
 
-                  {/* Token Input */}
+                  {/* License Key Input */}
                   <div>
                     <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block mb-1.5">
-                      Token Aktivasi dari Admin
+                      User License Key dari Admin
                     </label>
                     <input
                       type="text"
