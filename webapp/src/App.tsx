@@ -16,6 +16,7 @@ import {
   X,
   Split,
   Lock,
+  Unlock,
   Eye,
   EyeOff,
   Key,
@@ -221,6 +222,9 @@ export default function App() {
   const [extractPagesStr, setExtractPagesStr] = useState<string>('1, 3');
   const [mergeExtract, setMergeExtract] = useState<boolean>(true);
   const [targetMB, setTargetMB] = useState<number>(2);
+
+  // --- LOCK & UNLOCK MODE STATE ---
+  const [lockSubMode, setLockSubMode] = useState<'lock' | 'unlock'>('lock');
 
   // --- MERGE MODE STATE ---
   const [mergeFiles, setMergeFiles] = useState<MergeFileItem[]>([]);
@@ -1449,34 +1453,66 @@ export default function App() {
     );
   };
 
-  // --- DEDICATED LOCK PDF LOGIC ---
+  // --- DEDICATED LOCK & UNLOCK PDF LOGIC ---
   const handleExecuteDedicatedLock = async () => {
-    if (!file || !pdfDoc) {
-      alert('Harap pilih file PDF yang ingin dikunci terlebih dahulu!');
+    if (!file) {
+      alert('Harap pilih file PDF terlebih dahulu!');
       return;
     }
     if (!pdfPassword || !pdfPassword.trim()) {
-      alert('Harap masukkan kata sandi pengunci PDF!');
+      alert('Harap masukkan kata sandi PDF!');
       return;
     }
 
     setLoading(true);
-    setStatusMsg('Mengunci & Mengenkripsi Dokumen PDF...');
+    const baseName = file.name.replace(/\.[^/.]+$/, '');
 
-    try {
-      const arrayBuffer = await file.arrayBuffer();
-      const pdfBytes = new Uint8Array(arrayBuffer);
+    if (lockSubMode === 'lock') {
+      setStatusMsg('Mengunci & Mengenkripsi Dokumen PDF...');
+      try {
+        const arrayBuffer = await file.arrayBuffer();
+        const pdfBytes = new Uint8Array(arrayBuffer);
+        const lockedBytes = await encryptPDF(pdfBytes, pdfPassword);
+        await downloadBlob(lockedBytes, `${baseName}_protected.pdf`);
+      } catch (err: any) {
+        alert('Gagal mengunci file PDF: ' + err.message);
+      } finally {
+        setLoading(false);
+        setStatusMsg('');
+      }
+    } else {
+      // UNLOCK MODE: Coba decrypt PDF menggunakan pdfjsLib dengan password yang di-input
+      setStatusMsg('Memverifikasi Password & Buka Kunci PDF...');
+      try {
+        const arrayBuffer = await file.arrayBuffer();
+        
+        // Verifikasi password asli terlebih dahulu dengan pdfjsLib
+        const loadingTask = pdfjsLib.getDocument({
+          data: new Uint8Array(arrayBuffer),
+          password: pdfPassword.trim(),
+        });
 
-      // Use pdf-encrypt-lite to encrypt the PDF bytes directly
-      const lockedBytes = await encryptPDF(pdfBytes, pdfPassword);
-      
-      const baseName = file.name.replace(/\.[^/.]+$/, '');
-      await downloadBlob(lockedBytes, `${baseName}_protected.pdf`);
-    } catch (err: any) {
-      alert('Gagal mengunci file PDF: ' + err.message);
-    } finally {
-      setLoading(false);
-      setStatusMsg('');
+        const verifiedPdf = await loadingTask.promise;
+        
+        // Password valid! Sekarang kita buat ulang PDF tanpa password menggunakan pdf-lib
+        const pdfDocToUnlock = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
+        const unlockedPdfDoc = await PDFDocument.create();
+        const pageIndices = Array.from({ length: verifiedPdf.numPages }, (_, i) => i);
+        const copiedPages = await unlockedPdfDoc.copyPages(pdfDocToUnlock, pageIndices);
+        copiedPages.forEach((page) => unlockedPdfDoc.addPage(page));
+
+        const unlockedBytes = await unlockedPdfDoc.save();
+        await downloadBlob(unlockedBytes, `${baseName}_unlocked.pdf`);
+      } catch (err: any) {
+        if (err.name === 'PasswordException' || err.message?.toLowerCase().includes('password')) {
+          alert('❌ Kata sandi salah! Penguncian tidak dapat dibuka kecuali kata sandi aslinya cocok.');
+        } else {
+          alert('❌ Gagal membuka kunci PDF: ' + (err.message || 'Password tidak cocok atau file terkorupsi.'));
+        }
+      } finally {
+        setLoading(false);
+        setStatusMsg('');
+      }
     }
   };
 
@@ -1570,7 +1606,7 @@ export default function App() {
               className={`flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-md transition ${mainTool === 'lock' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}
             >
               <Lock className="w-3.5 h-3.5" />
-              <span>Protect & Lock</span>
+              <span>Lock & Unlock</span>
             </button>
             <button 
               onClick={() => setMainTool('watermark')}
@@ -1834,16 +1870,44 @@ export default function App() {
           </div>
         )}
 
-        {/* --- DEDICATED PROTECT & LOCK PDF SUITE --- */}
+        {/* --- DEDICATED LOCK & UNLOCK PDF SUITE --- */}
         {mainTool === 'lock' && (
           <div className="flex-1 flex gap-5">
             <aside className="w-[360px] bg-[#2B2B36]/90 border border-slate-700/40 rounded-xl p-4 flex flex-col gap-4 shadow-xl backdrop-blur-xl flex-shrink-0 overflow-y-auto">
               <div className="flex items-center gap-2 border-b border-slate-700/50 pb-3">
                 <ShieldCheck className="w-5 h-5 text-indigo-400" />
                 <div>
-                  <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wider">Protect & Lock PDF</h3>
-                  <p className="text-[11px] text-slate-400">Enkripsi Standar PDF 1.7 dengan Kata Sandi</p>
+                  <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wider">Lock & Unlock PDF</h3>
+                  <p className="text-[11px] text-slate-400">Proteksi Keamanan Dokumen dengan Kata Sandi</p>
                 </div>
+              </div>
+
+              {/* Mode Toggle Tab: Lock vs Unlock */}
+              <div className="flex rounded-lg bg-slate-950/80 p-1 border border-slate-700/50">
+                <button
+                  type="button"
+                  onClick={() => setLockSubMode('lock')}
+                  className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition flex items-center justify-center gap-1.5 ${
+                    lockSubMode === 'lock'
+                      ? 'bg-indigo-600 text-white shadow-sm'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <Lock className="w-3.5 h-3.5" />
+                  <span>Kunci PDF (Lock)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLockSubMode('unlock')}
+                  className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition flex items-center justify-center gap-1.5 ${
+                    lockSubMode === 'unlock'
+                      ? 'bg-emerald-600 text-white shadow-sm'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <Unlock className="w-3.5 h-3.5" />
+                  <span>Buka Kunci (Unlock)</span>
+                </button>
               </div>
 
               {/* Upload Input File */}
@@ -1853,8 +1917,12 @@ export default function App() {
                   file ? 'border-indigo-500/50 bg-indigo-500/10 hover:bg-indigo-500/15' : 'border-slate-600/60 bg-slate-800/40 hover:bg-slate-800/70 hover:border-slate-500'
                 }`}
               >
-                <div className={`w-10 h-10 rounded-full flex items-center justify-center transition shadow-inner ${file ? 'bg-indigo-500 text-white' : 'bg-slate-700/70 text-slate-300'}`}>
-                  <Lock className="w-5 h-5" />
+                <div className={`w-10 h-10 rounded-full flex items-center justify-center transition shadow-inner ${
+                  file 
+                    ? (lockSubMode === 'lock' ? 'bg-indigo-500 text-white' : 'bg-emerald-500 text-white')
+                    : 'bg-slate-700/70 text-slate-300'
+                }`}>
+                  {lockSubMode === 'lock' ? <Lock className="w-5 h-5" /> : <Unlock className="w-5 h-5" />}
                 </div>
                 {file ? (
                   <div className="w-full">
@@ -1863,7 +1931,9 @@ export default function App() {
                   </div>
                 ) : (
                   <div>
-                    <p className="font-semibold text-xs text-slate-200">Pilih File PDF yang Ingin Dikunci</p>
+                    <p className="font-semibold text-xs text-slate-200">
+                      {lockSubMode === 'lock' ? 'Pilih File PDF yang Ingin Dikunci' : 'Pilih File PDF yang Terkunci'}
+                    </p>
                     <p className="text-[11px] text-slate-400 mt-0.5">Klik untuk memilih dokumen PDF target</p>
                   </div>
                 )}
@@ -1873,14 +1943,14 @@ export default function App() {
               {/* Password Controls */}
               <div className="bg-slate-900/60 border border-slate-700/50 rounded-xl p-4 flex flex-col gap-3">
                 <label className="text-xs font-medium text-slate-300 block">
-                  Set Kata Sandi Pengunci Dokumen
+                  {lockSubMode === 'lock' ? 'Set Kata Sandi Pengunci Dokumen' : 'Masukkan Kata Sandi Asli PDF'}
                 </label>
                 <div className="relative flex items-center">
                   <input 
                     type={showPdfPassword ? "text" : "password"} 
                     value={pdfPassword}
                     onChange={(e) => setPdfPassword(e.target.value)}
-                    placeholder="Masukkan password pengunci PDF..."
+                    placeholder={lockSubMode === 'lock' ? "Masukkan password pengunci PDF..." : "Masukkan password asli untuk membuka..."}
                     className="w-full bg-slate-950/80 border border-slate-700/80 rounded-lg pl-3 pr-8 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
                   />
                   <button type="button" onClick={() => setShowPdfPassword(!showPdfPassword)} className="absolute right-2.5 text-slate-400 hover:text-slate-200">
@@ -1888,17 +1958,25 @@ export default function App() {
                   </button>
                 </div>
                 <p className="text-[11px] text-slate-400 leading-relaxed">
-                  🔐 Dokumen akan dienkripsi dengan standar PDF Security. Siapapun yang ingin membuka file PDF harus memasukkan kata sandi ini.
+                  {lockSubMode === 'lock' 
+                    ? '🔐 Dokumen akan dienkripsi dengan standar PDF Security. Siapapun yang ingin membuka file PDF harus memasukkan kata sandi ini.'
+                    : '🔑 Masukkan kata sandi asli pengunci PDF. Penguncian HANYA dapat dilepas jika kata sandi cocok.'}
                 </p>
               </div>
 
               <button 
                 disabled={!file || !pdfPassword.trim() || loading}
                 onClick={handleExecuteDedicatedLock}
-                className="w-full mt-auto bg-gradient-to-r from-emerald-600 to-indigo-600 hover:from-emerald-500 hover:to-indigo-500 disabled:opacity-40 text-white font-semibold py-3 rounded-lg shadow-md transition flex items-center justify-center gap-2 text-xs"
+                className={`w-full mt-auto disabled:opacity-40 text-white font-semibold py-3 rounded-lg shadow-md transition flex items-center justify-center gap-2 text-xs ${
+                  lockSubMode === 'lock'
+                    ? 'bg-gradient-to-r from-indigo-600 to-emerald-600 hover:from-indigo-500 hover:to-emerald-500'
+                    : 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500'
+                }`}
               >
-                {loading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Lock className="w-4 h-4" />}
-                <span>Kunci & Simpan Dokumen PDF</span>
+                {loading ? <RefreshCw className="w-4 h-4 animate-spin" /> : (lockSubMode === 'lock' ? <Lock className="w-4 h-4" /> : <Unlock className="w-4 h-4" />)}
+                <span>
+                  {lockSubMode === 'lock' ? 'Kunci & Simpan Dokumen PDF' : 'Buka Kunci (Unlock) PDF'}
+                </span>
               </button>
             </aside>
 
