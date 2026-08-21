@@ -1486,7 +1486,7 @@ export default function App() {
       try {
         const arrayBuffer = await file.arrayBuffer();
         
-        // Verifikasi password asli terlebih dahulu dengan pdfjsLib
+        // 1. Verifikasi password asli terlebih dahulu dengan pdfjsLib
         const pdfJsBytes = new Uint8Array(arrayBuffer.slice(0));
         const loadingTask = pdfjsLib.getDocument({
           data: pdfJsBytes,
@@ -1494,14 +1494,36 @@ export default function App() {
         });
 
         const verifiedPdf = await loadingTask.promise;
-        
-        // Password valid! Buat PDF terurai baru tanpa enkripsi
-        const pdfLibBuffer = arrayBuffer.slice(0);
-        const pdfDocToUnlock = await PDFDocument.load(pdfLibBuffer, { ignoreEncryption: true });
+        const totalPagesToUnlock = verifiedPdf.numPages;
+
+        // 2. Render setiap halaman menggunakan PDF.js canvas dan gabungkan ke PDFDocument baru (bebas enkripsi & 100% utuh)
         const unlockedPdfDoc = await PDFDocument.create();
-        const pageIndices = Array.from({ length: verifiedPdf.numPages }, (_, i) => i);
-        const copiedPages = await unlockedPdfDoc.copyPages(pdfDocToUnlock, pageIndices);
-        copiedPages.forEach((page) => unlockedPdfDoc.addPage(page));
+
+        for (let i = 1; i <= totalPagesToUnlock; i++) {
+          setStatusMsg(`Membuka kunci halaman ${i} dari ${totalPagesToUnlock}...`);
+          const page = await verifiedPdf.getPage(i);
+          const viewport = page.getViewport({ scale: 2.0 }); // High resolution 2x
+          
+          const canvas = document.createElement('canvas');
+          const context = canvas.getContext('2d');
+          canvas.width = viewport.width;
+          canvas.height = viewport.height;
+
+          if (context) {
+            await page.render({ canvasContext: context, viewport }).promise;
+            const imgDataUrl = canvas.toDataURL('image/png', 1.0);
+            const pngImage = await unlockedPdfDoc.embedPng(imgDataUrl);
+
+            // Buat halaman PDF baru dengan ukuran viewport asli
+            const newPage = unlockedPdfDoc.addPage([viewport.width / 2.0, viewport.height / 2.0]);
+            newPage.drawImage(pngImage, {
+              x: 0,
+              y: 0,
+              width: viewport.width / 2.0,
+              height: viewport.height / 2.0,
+            });
+          }
+        }
 
         const unlockedBytes = await unlockedPdfDoc.save();
         await downloadBlob(unlockedBytes, `${baseName}_unlocked.pdf`);
