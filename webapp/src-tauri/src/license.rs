@@ -87,11 +87,11 @@ pub async fn verify_online_license(
     let email_clean = email.trim().to_lowercase();
     let key_clean = license_key.trim().to_uppercase();
 
-    // 1. Query Neon DB
+    // 1. Query Neon DB (case-insensitive for email and license_key)
     let client = get_db_client().await?;
     let rows = client.query(
         "SELECT email, machine_key, license_key, is_active, expires_at 
-         FROM licenses WHERE LOWER(email) = $1 AND license_key = $2 LIMIT 1",
+         FROM licenses WHERE LOWER(email) = $1 AND UPPER(license_key) = $2 LIMIT 1",
         &[&email_clean, &key_clean],
     ).await.map_err(|e| format!("Gagal query ke Neon DB: {}", e))?;
 
