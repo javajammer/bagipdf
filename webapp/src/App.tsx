@@ -1056,61 +1056,13 @@ export default function App() {
     const items = textContent.items as any[];
     const fullText = items.map((it: any) => it.str).join(' ');
 
-    const extractMatch = (regex: RegExp, defaultVal: string = ''): string => {
-      const match = fullText.match(regex);
-      return match ? match[1].trim() : defaultVal;
-    };
-
-    const headerMatch = fullText.match(/([A-Z0-9]{8,12})\s+(\d{2}-\d{4})\s+(TIDAK FINAL|FINAL)\s+(NORMAL|PEMBETULAN)/i);
-    const nomorDokumen = headerMatch ? headerMatch[1] : extractMatch(/([A-Z0-9]{9})/);
-    const masaPajak = headerMatch ? headerMatch[2] : extractMatch(/(\d{2}-\d{4})/);
-    const statusBukti = headerMatch ? headerMatch[4] : (fullText.includes('PEMBETULAN') ? 'PEMBETULAN' : 'NORMAL');
-
-    const npwpNik = extractMatch(/A\.1\s+NPWP\s*\/\s*NIK\s*:\s*(\d{15,16})/i);
-    const nama = extractMatch(/A\.2\s+NAMA\s*:\s*(.+?)\s+A\.3/i);
-    const jenisFasilitas = extractMatch(/B\.1\s+Jenis Fasilitas\s*:\s*(.+?)\s+B\.2/i, 'Tanpa Fasilitas');
-    const jenisPPh = extractMatch(/B\.2\s+Jenis PPh\s*:\s*(.+?)\s+KODE/i, 'Pasal 23');
-
-    const tableMatch = fullText.match(/(\d{2}-\d{3}-\d{2})\s+(.+?)\s+([\d\.]+)\s+([\d,]+%?)\s+([\d\.]+)\s+B\.8/i);
-    const kodeObjekPajak = tableMatch ? tableMatch[1] : extractMatch(/(\d{2}-\d{3}-\d{2})/);
-    const objekPajak = tableMatch ? tableMatch[2] : '';
-    const dpp = tableMatch ? tableMatch[3] : '';
-    let tarif = tableMatch ? tableMatch[4] : '';
-    if (tarif && !tarif.includes('%')) tarif = `${tarif},00%`;
-    const pph = tableMatch ? tableMatch[5] : '';
-
-    const docMatch = fullText.match(/Jenis Dokumen\s*:\s*(.+?)\s+Tanggal\s*:\s*(.+?)\s+B\.9/i);
-    const jenisDokumenDasar = docMatch ? `${docMatch[1].trim()} , Tanggal : ${docMatch[2].trim()}` : '';
-
-    const noDokumenDasar = extractMatch(/B\.9\s+Nomor Dokumen\s*:\s*(.+?)\s+B\.10/i);
-    const npwpPemotong = extractMatch(/C\.1\s+NPWP\s*\/\s*NIK\s*:\s*(\d{15,16})/i);
-    const nitkuPemotong = extractMatch(/C\.2\s+NOMOR IDENTITAS TEMPAT KEGIATAN\s+USAHA\s*\(NITKU\)\s*\/\s*SUBUNIT ORGANISASI\s*:\s*(.+?)\s+C\.3/i);
-    const namaPemotong = extractMatch(/C\.3\s+NAMA PEMOTONG[^\n:]*:\s*(.+?)\s+C\.4/i);
-    const tanggalPemotong = extractMatch(/C\.4\s+TANGGAL\s*:\s*(.+?)\s+C\.5/i);
-
-    const clean = (val: string) => sanitizeFormulas ? sanitizeExcelCell(val) : val.trim();
-
-    return [
-      clean(nomorDokumen),
-      clean(masaPajak),
-      clean(npwpNik),
-      clean(nama),
-      clean(statusBukti),
-      clean(jenisFasilitas),
-      clean(jenisPPh),
-      clean(kodeObjekPajak),
-      clean(objekPajak),
-      clean(dpp),
-      clean(tarif),
-      clean(pph),
-      clean(jenisDokumenDasar),
-      clean(noDokumenDasar),
-      clean(npwpPemotong),
-      clean(namaPemotong),
-      clean(nitkuPemotong),
-      clean(tanggalPemotong),
-      clean(fileName)
-    ];
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const row = await invoke<string[]>('parse_ebupot_pdf_text', { fullText, fileName });
+      return row.map(val => sanitizeFormulas ? sanitizeExcelCell(val) : val.trim());
+    } catch (err: any) {
+      throw new Error(err || 'Gagal mengekstrak Ebupot PDF');
+    }
   };
 
   const startBatchPdfToExcelExecution = async (itemsToProcess?: BatchPdfItem[]) => {

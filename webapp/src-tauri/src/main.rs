@@ -2,6 +2,7 @@
 
 use std::fs;
 
+mod ebupot;
 mod fingerprint;
 mod license;
 
@@ -124,7 +125,8 @@ fn main() {
             verify_ip_access,
             get_machine_key,
             activate_ebupot_license,
-            check_ebupot_license
+            check_ebupot_license,
+            ebupot::parse_ebupot_pdf_text
         ])
         .run(tauri::generate_context!())
         .expect("error while running BagiPDF Tauri application");
