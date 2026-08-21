@@ -2912,7 +2912,7 @@ export default function App() {
             </div>
             <div>
               <h3 className="text-lg font-bold text-white">BagiPDF Suite</h3>
-              <p className="text-xs text-slate-400 mt-1">Versi 2.3.1 • Rust & Tauri Engine</p>
+              <p className="text-xs text-slate-400 mt-1">Versi 2.4.2 • Rust & Tauri Engine</p>
             </div>
             <div className="w-full bg-slate-900/60 border border-slate-700/50 rounded-xl p-4 text-xs text-slate-300 space-y-2.5 text-left">
               <div className="flex items-center gap-2.5"><User className="w-4 h-4 text-indigo-400" /><span>Pengembang: <strong>Muhammmad Fahrizal Rahman</strong></span></div>
