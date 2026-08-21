@@ -1,0 +1,11 @@
+/home/rizal/Documents/PersonalAI/pdfSplit/webapp/src-tauri/target/debug/deps/zvariant_derive-b3d34ec84778ea9c.d: /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zvariant_derive-5.14.0/src/lib.rs /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zvariant_derive-5.14.0/src/dict.rs /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zvariant_derive-5.14.0/src/signature.rs /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zvariant_derive-5.14.0/src/type.rs /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zvariant_derive-5.14.0/src/utils.rs /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zvariant_derive-5.14.0/src/value.rs /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zvariant_derive-5.14.0/src/../README.md
+
+/home/rizal/Documents/PersonalAI/pdfSplit/webapp/src-tauri/target/debug/deps/libzvariant_derive-b3d34ec84778ea9c.so: /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zvariant_derive-5.14.0/src/lib.rs /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zvariant_derive-5.14.0/src/dict.rs /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zvariant_derive-5.14.0/src/signature.rs /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zvariant_derive-5.14.0/src/type.rs /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zvariant_derive-5.14.0/src/utils.rs /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zvariant_derive-5.14.0/src/value.rs /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zvariant_derive-5.14.0/src/../README.md
+
+/home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zvariant_derive-5.14.0/src/lib.rs:
+/home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zvariant_derive-5.14.0/src/dict.rs:
+/home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zvariant_derive-5.14.0/src/signature.rs:
+/home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zvariant_derive-5.14.0/src/type.rs:
+/home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zvariant_derive-5.14.0/src/utils.rs:
+/home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zvariant_derive-5.14.0/src/value.rs:
+/home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zvariant_derive-5.14.0/src/../README.md:

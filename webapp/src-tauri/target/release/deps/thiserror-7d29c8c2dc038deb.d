@@ -1,0 +1,14 @@
+/home/rizal/Documents/PersonalAI/pdfSplit/webapp/src-tauri/target/release/deps/thiserror-7d29c8c2dc038deb.d: /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/lib.rs /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/aserror.rs /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/display.rs /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/var.rs /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/private.rs /home/rizal/Documents/PersonalAI/pdfSplit/webapp/src-tauri/target/release/build/thiserror-ab0d6b730f78279c/out/private.rs
+
+/home/rizal/Documents/PersonalAI/pdfSplit/webapp/src-tauri/target/release/deps/libthiserror-7d29c8c2dc038deb.rlib: /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/lib.rs /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/aserror.rs /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/display.rs /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/var.rs /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/private.rs /home/rizal/Documents/PersonalAI/pdfSplit/webapp/src-tauri/target/release/build/thiserror-ab0d6b730f78279c/out/private.rs
+
+/home/rizal/Documents/PersonalAI/pdfSplit/webapp/src-tauri/target/release/deps/libthiserror-7d29c8c2dc038deb.rmeta: /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/lib.rs /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/aserror.rs /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/display.rs /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/var.rs /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/private.rs /home/rizal/Documents/PersonalAI/pdfSplit/webapp/src-tauri/target/release/build/thiserror-ab0d6b730f78279c/out/private.rs
+
+/home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/lib.rs:
+/home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/aserror.rs:
+/home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/display.rs:
+/home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/var.rs:
+/home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/private.rs:
+/home/rizal/Documents/PersonalAI/pdfSplit/webapp/src-tauri/target/release/build/thiserror-ab0d6b730f78279c/out/private.rs:
+
+# env-dep:OUT_DIR=/home/rizal/Documents/PersonalAI/pdfSplit/webapp/src-tauri/target/release/build/thiserror-ab0d6b730f78279c/out

@@ -1,0 +1,14 @@
+/home/rizal/Documents/PersonalAI/pdfSplit/tools/bagipdf-admin/target/release/deps/serde-32a2f69133207abc.d: /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/lib.rs /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/integer128.rs /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/mod.rs /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/de.rs /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/ser.rs /home/rizal/Documents/PersonalAI/pdfSplit/tools/bagipdf-admin/target/release/build/serde-6e3148135c8bb0bc/out/private.rs
+
+/home/rizal/Documents/PersonalAI/pdfSplit/tools/bagipdf-admin/target/release/deps/libserde-32a2f69133207abc.rlib: /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/lib.rs /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/integer128.rs /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/mod.rs /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/de.rs /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/ser.rs /home/rizal/Documents/PersonalAI/pdfSplit/tools/bagipdf-admin/target/release/build/serde-6e3148135c8bb0bc/out/private.rs
+
+/home/rizal/Documents/PersonalAI/pdfSplit/tools/bagipdf-admin/target/release/deps/libserde-32a2f69133207abc.rmeta: /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/lib.rs /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/integer128.rs /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/mod.rs /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/de.rs /home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/ser.rs /home/rizal/Documents/PersonalAI/pdfSplit/tools/bagipdf-admin/target/release/build/serde-6e3148135c8bb0bc/out/private.rs
+
+/home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/lib.rs:
+/home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/integer128.rs:
+/home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/mod.rs:
+/home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/de.rs:
+/home/rizal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/ser.rs:
+/home/rizal/Documents/PersonalAI/pdfSplit/tools/bagipdf-admin/target/release/build/serde-6e3148135c8bb0bc/out/private.rs:
+
+# env-dep:OUT_DIR=/home/rizal/Documents/PersonalAI/pdfSplit/tools/bagipdf-admin/target/release/build/serde-6e3148135c8bb0bc/out

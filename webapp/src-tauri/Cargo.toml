@@ -16,6 +16,14 @@ lopdf = "0.32"
 rfd = "0.15"
 open = "5.3"
 reqwest = { version = "0.12", features = ["json"] }
+sha2        = "0.10"
+hmac        = "0.12"
+hex         = "0.4"
+base64      = "0.22"
+chrono      = { version = "0.4", features = ["serde"] }
+aes-gcm     = "0.10"
+sysinfo     = "0.32"
+mac_address = "1.1"
 
 [profile.release]
 panic = "abort"

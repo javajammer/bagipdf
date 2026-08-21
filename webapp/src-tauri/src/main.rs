@@ -1,11 +1,13 @@
-// Prevents additional console window on Windows in release, DO NOT REMOVE!!
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+// Prevents additional console window on Windows in release, DO NOT REMOVE!!\n#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::fs;
 
+mod fingerprint;
+mod license;
+
 #[tauri::command]
 fn greet(name: &str) -> String {
-    format!("Hello, {}! BagiPDF v2.1.0 is running on Rust & Tauri engine.", name)
+    format!("Hello, {}! BagiPDF v2.3.2 is running on Rust & Tauri engine.", name)
 }
 
 #[tauri::command]
@@ -26,7 +28,7 @@ async fn save_file_dialog(default_name: String, contents: Vec<u8>) -> Result<Opt
         fs::write(file.path(), contents).map_err(|e| format!("Gagal menulis file: {}", e))?;
         Ok(Some(file.path().to_string_lossy().to_string()))
     } else {
-        Ok(None) // User cancelled save dialog
+        Ok(None)
     }
 }
 
@@ -97,14 +99,50 @@ async fn verify_ip_access() -> Result<bool, String> {
             }
         }
     }
-    
-    // If offline or unable to reach IP lookup services, deny access
     Ok(false)
+}
+
+/// Return machine key (full hex) dan display-friendly version untuk ditampilkan ke user
+#[tauri::command]
+fn get_machine_key() -> serde_json::Value {
+    let raw = fingerprint::collect_machine_key();
+    let display = fingerprint::format_display_key(&raw);
+    serde_json::json!({
+        "raw": raw,
+        "display": display
+    })
+}
+
+/// Aktivasi lisensi Ebupot dengan token dari admin
+#[tauri::command]
+async fn activate_ebupot_license(
+    app_handle: tauri::AppHandle,
+    token: String,
+    username: String,
+) -> Result<license::LicenseInfo, String> {
+    let machine_key = fingerprint::collect_machine_key();
+    license::activate_license(&app_handle, &token, &username, &machine_key)
+}
+
+/// Cek status lisensi Ebupot yang tersimpan
+#[tauri::command]
+fn check_ebupot_license(app_handle: tauri::AppHandle) -> license::LicenseInfo {
+    let machine_key = fingerprint::collect_machine_key();
+    license::check_license(&app_handle, &machine_key)
 }
 
 fn main() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![greet, save_file_dialog, open_url, select_folder_dialog, verify_ip_access])
+        .invoke_handler(tauri::generate_handler![
+            greet,
+            save_file_dialog,
+            open_url,
+            select_folder_dialog,
+            verify_ip_access,
+            get_machine_key,
+            activate_ebupot_license,
+            check_ebupot_license
+        ])
         .run(tauri::generate_context!())
         .expect("error while running BagiPDF Tauri application");
 }

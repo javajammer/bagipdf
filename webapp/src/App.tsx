@@ -41,7 +41,8 @@ import {
   Search,
   FileText,
   FileUp,
-  Loader2
+  Loader2,
+  Copy
 } from 'lucide-react';
 
 import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.min.js?url';
@@ -165,6 +166,52 @@ export default function App() {
     checkIpRestriction();
   }, []);
 
+  // --- EBUPOT LICENSE CHECK ---
+  React.useEffect(() => {
+    const checkLicense = async () => {
+      if (!('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) return;
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const [licInfo, mkInfo] = await Promise.all([
+          invoke<{ valid: boolean; username: string; expires_at: string; days_remaining: number; message: string }>('check_ebupot_license'),
+          invoke<{ raw: string; display: string }>('get_machine_key'),
+        ]);
+        setEbupotMachineKey(mkInfo);
+        setEbupotLicenseInfo(licInfo);
+        setEbupotLicenseStatus(licInfo.valid ? 'valid' : 'invalid');
+      } catch (e) {
+        console.warn('License check error:', e);
+        setEbupotLicenseStatus('invalid');
+      }
+    };
+    checkLicense();
+  }, []);
+
+  const handleEbupotActivation = async () => {
+    if (!ebupotActivationToken.trim() || !ebupotActivationUsername.trim()) {
+      setEbupotActivationError('Nama pengguna dan token wajib diisi.');
+      return;
+    }
+    setEbupotActivationLoading(true);
+    setEbupotActivationError('');
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const result = await invoke<{ valid: boolean; username: string; expires_at: string; days_remaining: number; message: string }>(
+        'activate_ebupot_license',
+        { token: ebupotActivationToken.trim(), username: ebupotActivationUsername.trim() }
+      );
+      setEbupotLicenseInfo(result);
+      setEbupotLicenseStatus('valid');
+      setShowEbupotActivationModal(false);
+      setEbupotActivationToken('');
+      setEbupotActivationUsername('');
+    } catch (e: any) {
+      setEbupotActivationError(String(e));
+    } finally {
+      setEbupotActivationLoading(false);
+    }
+  };
+
   // --- SPLIT MODE STATE ---
   const [activeSplitTab, setActiveSplitTab] = useState<'custom' | 'fixed' | 'extract' | 'size'>('custom');
   const [customRanges, setCustomRanges] = useState<string>('1-2, 3-4');
@@ -204,6 +251,14 @@ export default function App() {
   const [excelOutputMode, setExcelOutputMode] = useState<'consolidated' | 'zip'>('consolidated');
   const [sanitizeFormulas, setSanitizeFormulas] = useState<boolean>(true);
   const [isLoadingFolder, setIsLoadingFolder] = useState<boolean>(false);
+  const [ebupotLicenseStatus, setEbupotLicenseStatus] = useState<'checking' | 'valid' | 'invalid'>('checking');
+  const [ebupotLicenseInfo, setEbupotLicenseInfo] = useState<{ valid: boolean; username: string; expires_at: string; days_remaining: number; message: string } | null>(null);
+  const [showEbupotActivationModal, setShowEbupotActivationModal] = useState<boolean>(false);
+  const [ebupotActivationToken, setEbupotActivationToken] = useState<string>('');
+  const [ebupotActivationUsername, setEbupotActivationUsername] = useState<string>('');
+  const [ebupotMachineKey, setEbupotMachineKey] = useState<{ raw: string; display: string }>({ raw: '', display: '' });
+  const [ebupotActivationLoading, setEbupotActivationLoading] = useState<boolean>(false);
+  const [ebupotActivationError, setEbupotActivationError] = useState<string>('');
   const [batchProgress, setBatchProgress] = useState<{ current: number; total: number; currentFileName: string; successCount: number; errorCount: number }>({
     current: 0,
     total: 0,
@@ -2122,6 +2177,138 @@ export default function App() {
 
         {/* --- 5. PDF TO EXCEL SUITE (UP TO 2000 PDFS / FOLDER SUPPORT) --- */}
         {mainTool === 'excel' && (
+          <>
+          {/* ── EBUPOT ACTIVATION MODAL ── */}
+          {showEbupotActivationModal && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+              <div className="w-full max-w-md bg-[#1E1E28] border border-slate-700/60 rounded-2xl shadow-2xl overflow-hidden">
+                {/* Header */}
+                <div className="bg-gradient-to-r from-indigo-900/60 to-slate-900/60 px-6 py-4 border-b border-slate-700/50 flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-full bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 flex-shrink-0">
+                    <Lock className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h2 className="text-sm font-bold text-white">Aktivasi Lisensi Ebupot</h2>
+                    <p className="text-[11px] text-slate-400">Fitur ini memerlukan lisensi perangkat resmi</p>
+                  </div>
+                </div>
+
+                <div className="p-6 flex flex-col gap-4">
+                  {/* Machine Key Display */}
+                  <div>
+                    <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block mb-1.5">
+                      Machine Key Perangkat Ini
+                    </label>
+                    <div className="flex items-center gap-2 bg-slate-950/80 border border-slate-700/60 rounded-lg px-3 py-2.5">
+                      <code className="text-xs text-emerald-400 font-mono flex-1 tracking-wider">
+                        {ebupotMachineKey.display || 'Memuat...'}
+                      </code>
+                      <button
+                        onClick={() => navigator.clipboard.writeText(ebupotMachineKey.raw)}
+                        className="text-slate-400 hover:text-white transition p-1 rounded hover:bg-slate-700/50 flex-shrink-0"
+                        title="Salin Machine Key lengkap"
+                      >
+                        <Copy className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                    <p className="text-[10px] text-slate-500 mt-1.5">
+                      📱 Kirim Machine Key di atas ke admin via WhatsApp untuk mendapatkan token aktivasi.
+                    </p>
+                  </div>
+
+                  {/* Username Input */}
+                  <div>
+                    <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block mb-1.5">
+                      Nama Pengguna
+                    </label>
+                    <input
+                      type="text"
+                      value={ebupotActivationUsername}
+                      onChange={e => setEbupotActivationUsername(e.target.value)}
+                      placeholder="Contoh: santi, budi, PT Maju Jaya..."
+                      className="w-full bg-slate-950/80 border border-slate-700/60 rounded-lg px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+
+                  {/* Token Input */}
+                  <div>
+                    <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block mb-1.5">
+                      Token Aktivasi dari Admin
+                    </label>
+                    <input
+                      type="text"
+                      value={ebupotActivationToken}
+                      onChange={e => setEbupotActivationToken(e.target.value.toUpperCase())}
+                      placeholder="BPDF-XXXX-XXXX-XXXX-XXXX-XXXX"
+                      className="w-full bg-slate-950/80 border border-slate-700/60 rounded-lg px-3 py-2 text-xs text-emerald-400 font-mono placeholder-slate-600 focus:outline-none focus:border-indigo-500 tracking-widest"
+                    />
+                  </div>
+
+                  {/* Error */}
+                  {ebupotActivationError && (
+                    <div className="bg-red-500/10 border border-red-500/30 rounded-lg px-3 py-2 text-[11px] text-red-400">
+                      ❌ {ebupotActivationError}
+                    </div>
+                  )}
+
+                  {/* Actions */}
+                  <div className="flex gap-2 pt-1">
+                    <button
+                      onClick={() => { setShowEbupotActivationModal(false); setEbupotActivationError(''); }}
+                      className="flex-1 py-2 text-xs font-medium text-slate-400 border border-slate-700/60 rounded-lg hover:bg-slate-800/50 transition"
+                    >
+                      Batalkan
+                    </button>
+                    <button
+                      onClick={handleEbupotActivation}
+                      disabled={ebupotActivationLoading}
+                      className="flex-1 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60 rounded-lg transition flex items-center justify-center gap-1.5"
+                    >
+                      {ebupotActivationLoading ? (
+                        <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Memverifikasi...</>
+                      ) : (
+                        <><Check className="w-3.5 h-3.5" /> Aktifkan Lisensi</>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ── LICENSE GATE: tampil jika belum berlisensi ── */}
+          {ebupotLicenseStatus === 'invalid' && !showEbupotActivationModal && (
+            <div className="flex-1 flex items-center justify-center p-8">
+              <div className="max-w-sm w-full bg-[#1E1E28] border border-amber-500/30 rounded-2xl p-8 text-center flex flex-col items-center gap-4 shadow-2xl">
+                <div className="w-16 h-16 rounded-full bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400">
+                  <Lock className="w-7 h-7" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">Akses Terbatas</h3>
+                  <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">
+                    Fitur <strong className="text-slate-300">PDF to Excel (Ebupot)</strong> memerlukan lisensi perangkat khusus.
+                  </p>
+                </div>
+                {ebupotLicenseInfo && !ebupotLicenseInfo.valid && ebupotLicenseInfo.expires_at && (
+                  <div className="w-full bg-slate-900/60 border border-slate-700/50 rounded-lg px-3 py-2 text-[11px] text-amber-400">
+                    ⏰ {ebupotLicenseInfo.message}
+                  </div>
+                )}
+                <button
+                  onClick={() => setShowEbupotActivationModal(true)}
+                  className="w-full py-2.5 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-500 rounded-xl transition flex items-center justify-center gap-2"
+                >
+                  <Key className="w-4 h-4" /> Aktifkan Lisensi
+                </button>
+                <p className="text-[10px] text-slate-500">
+                  Hubungi admin untuk mendapatkan token aktivasi.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* ── MAIN CONTENT: hanya tampil jika berlisensi ── */}
+          {(ebupotLicenseStatus === 'valid' || ebupotLicenseStatus === 'checking') && (
           <div className="flex-1 flex gap-5 overflow-hidden">
             {/* Left Sidebar Control Panel */}
             <aside className="w-[360px] bg-[#2B2B36]/90 border border-slate-700/40 rounded-xl p-4 flex flex-col gap-4 shadow-xl backdrop-blur-xl flex-shrink-0 overflow-y-auto">
@@ -2629,6 +2816,8 @@ export default function App() {
               )}
             </section>
           </div>
+          )} {/* end ebupotLicenseStatus valid/checking */}
+          </> /* end mainTool excel fragment */
         )}
       </main>
 

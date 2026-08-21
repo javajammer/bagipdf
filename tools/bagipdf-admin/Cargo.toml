@@ -1,0 +1,30 @@
+[package]
+name = "bagipdf-admin"
+version = "1.0.0"
+description = "BagiPDF Admin CLI — Generate & Track Ebupot License Tokens"
+authors = ["Muhammad Fahrizal Rahman"]
+edition = "2021"
+
+[[bin]]
+name = "bagipdf-admin"
+path = "src/main.rs"
+
+[dependencies]
+clap        = { version = "4", features = ["derive"] }
+sha2        = "0.10"
+hmac        = "0.12"
+hex         = "0.4"
+base64      = "0.22"
+chrono      = { version = "0.4", features = ["serde"] }
+serde       = { version = "1.0", features = ["derive"] }
+serde_json  = "1.0"
+dirs        = "5"
+
+# Hardware fingerprint
+sysinfo     = "0.32"
+mac_address = "1.1"
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
