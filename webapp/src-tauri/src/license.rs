@@ -215,7 +215,7 @@ pub async fn check_license_hybrid(app_handle: &tauri::AppHandle, machine_key: &s
     // Cek Online Sync dengan Neon DB jika ada koneksi
     if let Ok(db_client) = get_db_client().await {
         if let Ok(rows) = db_client.query(
-            "SELECT is_active, expires_at, machine_key FROM licenses WHERE LOWER(email) = $1 AND license_key = $2 LIMIT 1",
+            "SELECT is_active, expires_at, machine_key FROM licenses WHERE LOWER(email) = $1 AND UPPER(license_key) = $2 LIMIT 1",
             &[&email, &license_key],
         ).await {
             if let Some(row) = rows.first() {
