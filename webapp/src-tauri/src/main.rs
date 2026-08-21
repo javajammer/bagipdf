@@ -82,24 +82,7 @@ async fn select_folder_dialog() -> Result<Option<Vec<PdfFileInfo>>, String> {
 
 #[tauri::command]
 async fn verify_ip_access() -> Result<bool, String> {
-    const ALLOWED_IP: &str = "182.253.235.144";
-    let ip_endpoints = [
-        "https://api.ipify.org",
-        "https://icanhazip.com",
-        "https://ipinfo.io/ip"
-    ];
-
-    for endpoint in ip_endpoints {
-        if let Ok(response) = reqwest::get(endpoint).await {
-            if let Ok(ip_str) = response.text().await {
-                let clean_ip = ip_str.trim();
-                if !clean_ip.is_empty() {
-                    return Ok(clean_ip == ALLOWED_IP);
-                }
-            }
-        }
-    }
-    Ok(false)
+    Ok(true)
 }
 
 /// Return machine key (full hex) dan display-friendly version untuk ditampilkan ke user

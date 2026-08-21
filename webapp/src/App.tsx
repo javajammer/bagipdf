@@ -117,55 +117,8 @@ export default function App() {
   const [pendingFile, setPendingFile] = useState<File | null>(null);
 
   // --- IP RESTRICTION STATE ---
-  const [isIpAuthorized, setIsIpAuthorized] = useState<boolean | null>(null);
+  const [isIpAuthorized, setIsIpAuthorized] = useState<boolean | null>(true);
   const [currentPublicIp, setCurrentPublicIp] = useState<string>('');
-
-  React.useEffect(() => {
-    const checkIpRestriction = async () => {
-      const ALLOWED_IP = '182.253.235.144';
-      
-      // 1. Try native Rust verification if running inside Tauri
-      if ('__TAURI_INTERNALS__' in window || '__TAURI__' in window) {
-        try {
-          const { invoke } = await import('@tauri-apps/api/core');
-          const isAllowed = await invoke<boolean>('verify_ip_access');
-          setIsIpAuthorized(isAllowed);
-          if (isAllowed) return;
-        } catch (e) {
-          console.warn('Rust verify_ip_access error, falling back to JS fetch:', e);
-        }
-      }
-
-      // 2. Web / Frontend IP check fallback
-      const ipEndpoints = [
-        'https://api.ipify.org?format=json',
-        'https://ipinfo.io/json',
-        'https://icanhazip.com'
-      ];
-
-      for (const endpoint of ipEndpoints) {
-        try {
-          const res = await fetch(endpoint);
-          if (res.ok) {
-            const data = await res.json().catch(async () => ({ ip: (await res.text()).trim() }));
-            const userIp = (data.ip || data).trim();
-            if (userIp) {
-              setCurrentPublicIp(userIp);
-              setIsIpAuthorized(userIp === ALLOWED_IP);
-              return;
-            }
-          }
-        } catch (err) {
-          console.warn(`IP fetch failed for ${endpoint}:`, err);
-        }
-      }
-
-      // Deny access if IP cannot be verified
-      setIsIpAuthorized(false);
-    };
-
-    checkIpRestriction();
-  }, []);
 
   // --- EBUPOT LICENSE CHECK ---
   React.useEffect(() => {
