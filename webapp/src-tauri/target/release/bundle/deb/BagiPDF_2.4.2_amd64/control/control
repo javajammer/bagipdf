@@ -1,9 +1,0 @@
-Package: bagi-pdf
-Version: 2.4.2
-Architecture: amd64
-Installed-Size: 6310
-Maintainer: Muhammad Fahrizal Rahman
-Priority: optional
-Depends: libwebkit2gtk-4.1-0 | libwebkit2gtk-4.0-37, libgtk-3-0 | libgtk-3-0t64, libappindicator3-1 | libayatana-appindicator3-1, librsvg2-2, libsoup-3.0-0 | libsoup2.4-1, libc6, libwebkit2gtk-4.1-0, libgtk-3-0
-Description: BagiPDF - High Performance Portable PDF Tool in Rust & Tauri
- (none)

@@ -1,2 +1,0 @@
-createSrcSidebar('[["lopdf",["",[["encodings",[],["glyphnames.rs","mappings.rs","mod.rs"]],["filters",[],["mod.rs","png.rs"]]],["bookmarks.rs","content.rs","creator.rs","datetime.rs","destinations.rs","document.rs","encryption.rs","error.rs","incremental_document.rs","lib.rs","nom_parser.rs","object.rs","object_stream.rs","outlines.rs","parser_aux.rs","processor.rs","rc4.rs","reader.rs","toc.rs","writer.rs","xobject.rs","xref.rs"]]]]');
-//{"start":19,"fragment_lengths":[417]}

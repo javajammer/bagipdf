@@ -1,9 +1,0 @@
-[Desktop Entry]
-Categories=
-Comment=BagiPDF - High Performance Portable PDF Tool in Rust & Tauri
-Exec=bagipdf
-StartupWMClass=bagipdf
-Icon=bagipdf
-Name=BagiPDF
-Terminal=false
-Type=Application
