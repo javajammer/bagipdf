@@ -1487,15 +1487,17 @@ export default function App() {
         const arrayBuffer = await file.arrayBuffer();
         
         // Verifikasi password asli terlebih dahulu dengan pdfjsLib
+        const pdfJsBytes = new Uint8Array(arrayBuffer.slice(0));
         const loadingTask = pdfjsLib.getDocument({
-          data: new Uint8Array(arrayBuffer),
+          data: pdfJsBytes,
           password: pdfPassword.trim(),
         });
 
         const verifiedPdf = await loadingTask.promise;
         
-        // Password valid! Sekarang kita buat ulang PDF tanpa password menggunakan pdf-lib
-        const pdfDocToUnlock = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
+        // Password valid! Buat PDF terurai baru tanpa enkripsi
+        const pdfLibBuffer = arrayBuffer.slice(0);
+        const pdfDocToUnlock = await PDFDocument.load(pdfLibBuffer, { ignoreEncryption: true });
         const unlockedPdfDoc = await PDFDocument.create();
         const pageIndices = Array.from({ length: verifiedPdf.numPages }, (_, i) => i);
         const copiedPages = await unlockedPdfDoc.copyPages(pdfDocToUnlock, pageIndices);
