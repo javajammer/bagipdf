@@ -1,0 +1,34 @@
+#!/bin/bash
+# BagiPDF postrm script - dijalankan otomatis oleh dpkg saat 'apt remove'
+
+set -e
+
+case "$1" in
+  remove|purge)
+    # Hapus cache lisensi dari semua home directory pengguna yang ada
+    for USER_HOME in /home/*; do
+      if [ -d "$USER_HOME" ]; then
+        APP_DATA="$USER_HOME/.local/share/com.bagipdf.app"
+        if [ -d "$APP_DATA" ]; then
+          rm -rf "$APP_DATA"
+          echo "BagiPDF: Membersihkan data lisensi di $APP_DATA"
+        fi
+      fi
+    done
+
+    # Bersihkan juga untuk root jika perlu
+    ROOT_APP_DATA="/root/.local/share/com.bagipdf.app"
+    if [ -d "$ROOT_APP_DATA" ]; then
+      rm -rf "$ROOT_APP_DATA"
+    fi
+    ;;
+  upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+    # Tidak perlu melakukan apa-apa pada upgrade
+    ;;
+  *)
+    echo "postrm dipanggil dengan argumen tidak dikenal: $1" >&2
+    exit 1
+    ;;
+esac
+
+exit 0

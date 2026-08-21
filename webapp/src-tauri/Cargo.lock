@@ -306,6 +306,7 @@ dependencies = [
  "native-tls",
  "open",
  "postgres-native-tls",
+ "regex",
  "reqwest 0.12.28",
  "rfd",
  "serde",

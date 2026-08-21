@@ -50,6 +50,31 @@ if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "win32" || "$OSTYPE" == "cygwin" ]]; t
 elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
   echo "Target: Linux Binary Executable & Deb Package"
   npx tauri build
+
+  # ============================================================
+  #  Post-process: Inject postrm cleanup script into .deb
+  # ============================================================
+  DEB_DIR="src-tauri/target/release/bundle/deb"
+  POSTRM_SRC="src-tauri/scripts/postrm"
+  DEB_FILE=$(find "$DEB_DIR" -name "*.deb" | head -1)
+
+  if [ -n "$DEB_FILE" ] && [ -f "$POSTRM_SRC" ]; then
+    echo ""
+    echo "[+] Menyuntikkan postrm cleanup script ke $DEB_FILE ..."
+    TMPDIR=$(mktemp -d)
+    # Extract existing .deb
+    dpkg-deb --raw-extract "$DEB_FILE" "$TMPDIR/pkg"
+    # Copy postrm script to control directory
+    cp "$POSTRM_SRC" "$TMPDIR/pkg/DEBIAN/postrm"
+    chmod 0755 "$TMPDIR/pkg/DEBIAN/postrm"
+    # Repackage the .deb
+    dpkg-deb --build "$TMPDIR/pkg" "$DEB_FILE"
+    rm -rf "$TMPDIR"
+    echo "[✓] postrm script berhasil disuntikkan ke paket .deb!"
+  else
+    echo "[!] Warning: File .deb atau script postrm tidak ditemukan, skip injeksi."
+  fi
+
 elif [[ "$OSTYPE" == "darwin"* ]]; then
   echo "Target: macOS App Bundle"
   npx tauri build
