@@ -304,7 +304,7 @@ export default function App() {
 
       let loadedPdf: PDFDocument;
       try {
-        loadedPdf = await PDFDocument.load(arrayBuffer, { ignoreEncryption: false });
+        loadedPdf = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
       } catch (pdfLibErr: any) {
         throw pdfLibErr;
       }
