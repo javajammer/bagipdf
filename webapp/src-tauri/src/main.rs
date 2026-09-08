@@ -1,6 +1,8 @@
-// Prevents additional console window on Windows in release, DO NOT REMOVE!!\n#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+// Prevents additional console window on Windows in release, DO NOT REMOVE!!
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::fs;
+use tauri::{Listener, Manager};
 
 mod ebupot;
 mod fingerprint;
@@ -116,7 +118,27 @@ async fn check_ebupot_license(app_handle: tauri::AppHandle) -> license::LicenseI
 }
 
 fn main() {
+    // Fix blank white screen on Linux WebKit2GTK:
+    // DMA-Buf renderer causes blank window on many Linux GPU drivers.
+    // These env vars disable the problematic compositor path.
+    #[cfg(target_os = "linux")]
+    {
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
+        std::env::set_var("WEBKIT_DISABLE_COMPOSITED_LAYER_REBUILDING", "1");
+    }
+
     tauri::Builder::default()
+        .setup(|app| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let window_clone = window.clone();
+                window.listen("tauri://loaded", move |_| {
+                    let _ = window_clone.set_focus();
+                });
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             greet,
             save_file_dialog,

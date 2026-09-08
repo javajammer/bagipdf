@@ -12,17 +12,19 @@
   "app": {
     "windows": [
       {
-        "title": "BagiPDF",
-        "width": 1200,
-        "height": 800,
-        "minWidth": 950,
-        "minHeight": 650,
-        "center": true,
-        "resizable": true
+      "label": "main",
+      "title": "BagiPDF",
+      "width": 1200,
+      "height": 800,
+      "minWidth": 950,
+      "minHeight": 650,
+      "center": true,
+      "resizable": true,
+      "visible": true
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https:"
+      "csp": null
     }
   },
   "bundle": {

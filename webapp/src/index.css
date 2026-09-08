@@ -2,7 +2,36 @@
 @tailwind components;
 @tailwind utilities;
 
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background-color: #1e1e24;
+  color: #e2e8f0;
+}
+
 body {
   background-color: #1e1e24;
   color: #e2e8f0;
+}
+
+/* Force dark theme for select dropdowns and options */
+select {
+  background-color: #16161c !important;
+  color: #f1f5f9 !important;
+  border-color: #334155 !important;
+}
+
+select option {
+  background-color: #16161c !important;
+  color: #f1f5f9 !important;
+  padding: 8px;
+}
+
+input[type="text"],
+input[type="number"],
+input[type="password"] {
+  background-color: #16161c !important;
+  color: #f1f5f9 !important;
+  border-color: #334155 !important;
 }

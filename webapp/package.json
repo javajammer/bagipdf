@@ -3,7 +3,6 @@
   "version": "2.4.2",
   "type": "module",
   "description": "BagiPDF - High Performance Portable Windows PDF Suite powered by Rust & Tauri by Muhammad Fahrizal Rahman",
-  "main": "electron.cjs",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
@@ -11,32 +10,7 @@
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
-    "electron:dev": "cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .",
     "dist:win": "npm run build && tauri build"
-  },
-  "build": {
-    "appId": "com.bagipdf.app",
-    "productName": "BagiPDF",
-    "npmRebuild": false,
-    "buildDependenciesFromSource": false,
-    "nodeGypRebuild": false,
-    "directories": {
-      "output": "../dist_electron"
-    },
-    "files": [
-      "dist/**/*",
-      "electron.cjs"
-    ],
-    "win": {
-      "target": [
-        "portable"
-      ],
-      "publisherName": "Muhammad Fahrizal Rahman",
-      "icon": "public/vite.svg"
-    },
-    "portable": {
-      "artifactName": "BagiPDF-v${version}.exe"
-    }
   },
   "dependencies": {
     "@pdfsmaller/pdf-encrypt-lite": "^1.2.0",
@@ -44,9 +18,10 @@
     "jszip": "^3.10.1",
     "lucide-react": "^1.16.0",
     "pdf-lib": "^1.17.1",
-    "pdfjs-dist": "3.11.174",
+    "pdfjs-dist": "^6.3.289",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "tesseract.js": "^6.0.0",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
@@ -57,9 +32,6 @@
     "@types/react-dom": "^19.0.4",
     "@vitejs/plugin-react": "^4.7.0",
     "autoprefixer": "^10.5.4",
-    "cross-env": "^7.0.3",
-    "electron": "^34.3.0",
-    "electron-builder": "^25.1.8",
     "postcss": "^8.5.26",
     "tailwindcss": "^3.4.19",
     "typescript": "~5.7.2",

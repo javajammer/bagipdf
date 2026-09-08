@@ -6,10 +6,12 @@ export default defineConfig({
   plugins: [react()],
   base: './',
   server: {
+    host: 'localhost',
     port: 5173,
     strictPort: true,
     hmr: {
-      overlay: false
+      overlay: false,
+      host: 'localhost',
     }
   }
 })

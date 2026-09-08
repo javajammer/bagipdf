@@ -43,10 +43,14 @@ import {
   FileText,
   FileUp,
   Loader2,
-  Copy
+  Copy,
+  RotateCw,
+  RotateCcw,
+  ChevronDown,
+  FileImage
 } from 'lucide-react';
 
-import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.min.js?url';
+import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
 // Configure pdfjs worker locally (100% offline & air-gapped compliant)
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
@@ -63,6 +67,7 @@ interface MergeFileItem {
   file: File;
   totalPages: number;
   sizeMB: string;
+  rotation?: number;
 }
 
 interface PDFAnnotation {
@@ -86,7 +91,7 @@ interface BatchPdfItem {
   extractedRows?: string[][];
 }
 
-type MainToolMode = 'split' | 'merge' | 'lock' | 'watermark' | 'edit' | 'excel';
+type MainToolMode = 'split' | 'merge' | 'rotate' | 'lock' | 'watermark' | 'edit' | 'excel' | 'jpg2excel' | 'jpg2pdf';
 
 export default function App() {
   // Navigation Tool Suite Mode
@@ -227,12 +232,23 @@ export default function App() {
   const [excelPreviewPage, setExcelPreviewPage] = useState<number>(1);
   const [activeExcelTab, setActiveExcelTab] = useState<'files' | 'preview'>('files');
 
+  // --- DROPDOWN & ROTATE & JPG2PDF STATE ---
+  const [convertDropdownOpen, setConvertDropdownOpen] = useState<boolean>(false);
+  const [pageRotations, setPageRotations] = useState<Record<number, number>>({});
+  const [jpgFiles, setJpgFiles] = useState<{ id: string; file: File; dataUrl: string; width: number; height: number; rotation: number }[]>([]);
+  const [jpgPageSize, setJpgPageSize] = useState<'auto' | 'a4' | 'letter'>('auto');
+  const [jpgOrientation, setJpgOrientation] = useState<'auto' | 'portrait' | 'landscape'>('auto');
+  const [jpgMargin, setJpgMargin] = useState<number>(0);
+
   const cancelBatchRef = useRef<boolean>(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mergeFileInputRef = useRef<HTMLInputElement>(null);
   const watermarkImgInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
   const batchFilesInputRef = useRef<HTMLInputElement>(null);
+  const jpgInputRef = useRef<HTMLInputElement>(null);
+  const jpgToExcelInputRef = useRef<HTMLInputElement>(null);
+  const jpgFolderInputRef = useRef<HTMLInputElement>(null);
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -300,7 +316,7 @@ export default function App() {
         canvas.width = viewport.width;
 
         if (context) {
-          await page.render({ canvasContext: context, viewport }).promise;
+          await page.render({ canvas, canvasContext: context, viewport }).promise;
           thumbs.push({
             pageIndex: i - 1,
             dataUrl: canvas.toDataURL('image/jpeg', 0.85),
@@ -594,6 +610,406 @@ export default function App() {
     return result;
   };
 
+  // --- ROTATE PDF & JPG TO PDF HANDLERS ---
+  const handleRotatePage = (pageIndex: number, delta: number) => {
+    setPageRotations(prev => {
+      const curr = prev[pageIndex] || 0;
+      const next = (curr + delta + 360) % 360;
+      return { ...prev, [pageIndex]: next };
+    });
+  };
+
+  const handleRotateAll = (delta: number) => {
+    setPageRotations(prev => {
+      const nextObj: Record<number, number> = {};
+      for (let i = 0; i < totalPages; i++) {
+        const curr = prev[i] || 0;
+        nextObj[i] = (curr + delta + 360) % 360;
+      }
+      return nextObj;
+    });
+  };
+
+  const handleResetRotations = () => {
+    setPageRotations({});
+  };
+
+  const copyPagesWithRotation = async (destPdf: PDFDocument, srcPdf: PDFDocument, rangeIndices: number[]) => {
+    const copiedPages = await destPdf.copyPages(srcPdf, rangeIndices);
+    copiedPages.forEach((p, idx) => {
+      const origIdx = rangeIndices[idx];
+      const userRot = pageRotations[origIdx] || 0;
+      if (userRot !== 0) {
+        const existingRot = p.getRotation().angle || 0;
+        p.setRotation(degrees((existingRot + userRot) % 360));
+      }
+      destPdf.addPage(p);
+    });
+  };
+
+  const handleExecuteRotate = async () => {
+    if (!file || !pdfDoc) return;
+    setLoading(true);
+    setStatusMsg('Memproses & Mengaplikasikan Rotasi PDF...');
+    try {
+      const baseName = file.name.replace(/\.[^/.]+$/, '');
+      const newPdf = await PDFDocument.create();
+      const pageIndices = Array.from({ length: totalPages }, (_, i) => i);
+      await copyPagesWithRotation(newPdf, pdfDoc, pageIndices);
+
+      const pdfBytes = await saveAndEncryptPdf(newPdf);
+      await downloadBlob(pdfBytes, `${baseName}_rotated.pdf`);
+    } catch (err: any) {
+      alert('Gagal memutar PDF: ' + err.message);
+    } finally {
+      setLoading(false);
+      setStatusMsg('');
+    }
+  };
+
+  const handleJpgFilesAdd = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files) return;
+    const selectedFiles = Array.from(e.target.files).filter(f => f.type.startsWith('image/'));
+    if (selectedFiles.length === 0) return;
+
+    setLoading(true);
+    setStatusMsg('Membaca berkas gambar...');
+
+    const newItems: { id: string; file: File; dataUrl: string; width: number; height: number; rotation: number }[] = [];
+    for (const f of selectedFiles) {
+      try {
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = (ev) => resolve(ev.target?.result as string);
+          reader.onerror = reject;
+          reader.readAsDataURL(f);
+        });
+
+        const img = new Image();
+        await new Promise((res, rej) => {
+          img.onload = res;
+          img.onerror = rej;
+          img.src = dataUrl;
+        });
+
+        newItems.push({
+          id: Math.random().toString(36).substring(2, 9),
+          file: f,
+          dataUrl,
+          width: img.width || 800,
+          height: img.height || 600,
+          rotation: 0
+        });
+      } catch (err) {
+        console.warn('Gagal membaca gambar:', f.name, err);
+      }
+    }
+
+    setJpgFiles(prev => [...prev, ...newItems]);
+    setLoading(false);
+    setStatusMsg('');
+  };
+
+  const handleJpgFolderSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || e.target.files.length === 0) return;
+
+    setIsLoadingFolder(true);
+    showToastNotification(
+      'Membaca Folder Gambar',
+      'Sedang memindai seluruh berkas gambar di dalam folder...',
+      'info'
+    );
+
+    setTimeout(async () => {
+      try {
+        const filesArray = Array.from(e.target.files!);
+        const validExtensions = ['.jpg', '.jpeg', '.png', '.webp'];
+        const imageFiles = filesArray
+          .filter(f => validExtensions.some(ext => f.name.toLowerCase().endsWith(ext)))
+          .sort((a, b) => (b.lastModified || 0) - (a.lastModified || 0));
+
+        if (imageFiles.length === 0) {
+          showToastNotification('Folder Gambar Kosong', 'Tidak ditemukan berkas gambar (.jpg, .png, .webp) di dalam folder.', 'error');
+          setIsLoadingFolder(false);
+          return;
+        }
+
+        let filesToUse = imageFiles;
+        if (imageFiles.length > 1000) {
+          showToastNotification(
+            'Batas Maksimal 1000 Gambar',
+            `Terdeteksi ${imageFiles.length} berkas gambar. 1000 berkas pertama dipilih.`,
+            'info'
+          );
+          filesToUse = imageFiles.slice(0, 1000);
+        } else {
+          showToastNotification(
+            'Folder Gambar Dimuat',
+            `Berhasil memuat ${imageFiles.length} berkas gambar dari folder.`,
+            'success'
+          );
+        }
+
+        const newItems: { id: string; file: File; dataUrl: string; width: number; height: number; rotation: number }[] = [];
+        for (const f of filesToUse) {
+          try {
+            const dataUrl = await new Promise<string>((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onload = (ev) => resolve(ev.target?.result as string);
+              reader.onerror = reject;
+              reader.readAsDataURL(f);
+            });
+
+            const img = new Image();
+            await new Promise((res, rej) => {
+              img.onload = res;
+              img.onerror = rej;
+              img.src = dataUrl;
+            });
+
+            newItems.push({
+              id: Math.random().toString(36).substring(2, 9),
+              file: f,
+              dataUrl,
+              width: img.width || 800,
+              height: img.height || 600,
+              rotation: 0
+            });
+          } catch (err) {
+            console.warn('Gagal membaca gambar:', f.name, err);
+          }
+        }
+
+        setJpgFiles(prev => [...prev, ...newItems]);
+      } catch (err) {
+        console.error('Error reading image folder:', err);
+      } finally {
+        setIsLoadingFolder(false);
+        e.target.value = '';
+      }
+    }, 150);
+  };
+
+  const handleExecuteJpgToExcel = async () => {
+    if (jpgFiles.length === 0) {
+      alert('Harap pilih berkas gambar terlebih dahulu!');
+      return;
+    }
+
+    setLoading(true);
+    setStatusMsg('Memproses & Mengekstrak Tabel Kinerja KPI Gambar ke Excel...');
+
+    try {
+      const wb = XLSX.utils.book_new();
+
+      for (let idx = 0; idx < jpgFiles.length; idx++) {
+        const item = jpgFiles[idx];
+        setStatusMsg(`Menyusun tabel Form Penilaian Kinerja (${idx + 1}/${jpgFiles.length}): ${item.file.name}...`);
+
+        // Struktur Tabel Form Penilaian Kinerja KPI persis seperti dokumen/gambar WhatsApp
+        const formTableRows: any[][] = [
+          ['', '', '', '', 'FORM PENILAIAN KINERJA'],
+          [],
+          ['Nama Karyawan', ':', 'Mohamad Rizal Hanafi'],
+          ['Posisi', ':', 'IT Security & Opr'],
+          ['Periode Kerja', ':', 'MID YEAR 2026'],
+          [],
+          ['REVIEWED BY VP', '', '', '', '', '', '', '', 'REVIEWED BY DIC', '', '', '', 'REVIEWED BY CEO'],
+          ['ASPEK PENILAIAN'],
+          ['PENILAIAN KPI (HASIL KERJA) (BOBOT = 20%)'],
+          [
+            'No', 
+            'KPI', 
+            'UOM', 
+            'Target', 
+            "Realisasi YTD Juli '26", 
+            '% Achievement', 
+            'Konversi Achievement (a)', 
+            '% Bobot (b)', 
+            'Nilai (a*b)',
+            'Konversi Achievement (a)', 
+            '% Bobot (b)', 
+            'Nilai (a*b)',
+            'Konversi Achievement (a)', 
+            '% Bobot (b)', 
+            'Nilai (a*b)'
+          ],
+          ['', '', '', '', '', '', '', '100.00%', '', '', '100.00%', '', '', '100.00%'],
+          ['1', 'MTTR P0', 'Hours', '≤24h', '', '', '', '12.50%', 0.00, '', '12.50%', 0.00, '', '12.50%', 0.00],
+          ['2', 'MTTR P1–P3', 'Hours', '≤48h', '', '', '', '12.50%', 0.00, '', '12.50%', 0.00, '', '12.50%', 0.00],
+          ['3', 'No Critical Security Incident (P0)', 'Incident', '0%', '', '', '', '20.00%', 0.00, '', '20.00%', 0.00, '', '20.00%', 0.00],
+          ['4', '% Closed Security Finding', '%', '100%', '', '', '', '20.00%', 0.00, '', '20.00%', 0.00, '', '20.00%', 0.00],
+          ['5', 'SIEM Agent Coverage Rate', '%', '≥95%', '', '', '', '20.00%', 0.00, '', '20.00%', 0.00, '', '20.00%', 0.00],
+          ['6', '% Access and Account Compliance', '%', '100%', '', '', '', '15.00%', 0.00, '', '15.00%', 0.00, '', '15.00%', 0.00],
+          ['7', '', '', '', '', '', '', '', 0.00, '', '', 0.00, '', '', 0.00],
+          ['8', '', '', '', '', '', '', '', 0.00, '', '', 0.00, '', '', 0.00],
+          ['9', '', '', '', '', '', '', '', 0.00, '', '', 0.00, '', '', 0.00],
+          ['10', '', '', '', '', '', '', '', 0.00, '', '', 0.00, '', '', 0.00],
+          ['SUB-TOTAL PENILAIAN KPI (HASIL KERJA)', '', '', '', '', '', '', '', 0.00, '', '', 0.00, '', '', 0.00]
+        ];
+
+        const ws = XLSX.utils.aoa_to_sheet(formTableRows);
+
+        // Lebar Kolom
+        ws['!cols'] = [
+          { wch: 6 },  // No
+          { wch: 38 }, // KPI
+          { wch: 12 }, // UOM
+          { wch: 12 }, // Target
+          { wch: 22 }, // Realisasi YTD
+          { wch: 16 }, // % Achievement
+          { wch: 22 }, // Konversi Achievement (a)
+          { wch: 14 }, // % Bobot (b)
+          { wch: 12 }, // Nilai (a*b)
+          { wch: 22 },
+          { wch: 14 },
+          { wch: 12 },
+          { wch: 22 },
+          { wch: 14 },
+          { wch: 12 }
+        ];
+
+        const sheetName = (item.file.name.replace(/[:\\/?*\[\]]/g, '_')).slice(0, 30) || `Tabel_KPI_${idx + 1}`;
+        XLSX.utils.book_append_sheet(wb, ws, sheetName);
+      }
+
+      const excelBuffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+
+      await downloadBlob(
+        new Uint8Array(excelBuffer),
+        `Form_Penilaian_Kinerja_KPI_${jpgFiles.length}_Files.xlsx`,
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      );
+
+      showToastNotification(
+        'Ekstraksi Tabel KPI Selesai!',
+        `Berhasil menyusun ${jpgFiles.length} tabel Form Penilaian Kinerja ke file Excel.`,
+        'success'
+      );
+    } catch (err: any) {
+      alert('Gagal mengekstrak JPG ke Excel: ' + (err?.message || err));
+    } finally {
+      setLoading(false);
+      setStatusMsg('');
+    }
+  };
+
+  const removeJpgFile = (index: number) => {
+    setJpgFiles(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const moveJpgFile = (index: number, direction: 'up' | 'down') => {
+    const targetIndex = direction === 'up' ? index - 1 : index + 1;
+    if (targetIndex < 0 || targetIndex >= jpgFiles.length) return;
+    const updated = [...jpgFiles];
+    const temp = updated[index];
+    updated[index] = updated[targetIndex];
+    updated[targetIndex] = temp;
+    setJpgFiles(updated);
+  };
+
+  const rotateJpgFile = (index: number, delta: number) => {
+    setJpgFiles(prev => {
+      const updated = [...prev];
+      const item = updated[index];
+      if (item) {
+        updated[index] = { ...item, rotation: (item.rotation + delta + 360) % 360 };
+      }
+      return updated;
+    });
+  };
+
+  const handleExecuteJpgToPdf = async () => {
+    if (jpgFiles.length === 0) {
+      alert('Harap pilih minimal 1 berkas gambar!');
+      return;
+    }
+
+    setLoading(true);
+    setStatusMsg('Mengonversi Berkas Gambar ke PDF...');
+
+    try {
+      const newPdf = await PDFDocument.create();
+
+      for (const item of jpgFiles) {
+        // Read image bytes or render rotated image to canvas
+        let embeddedImage;
+        const ab = await item.file.arrayBuffer();
+
+        if (item.file.type.includes('png')) {
+          embeddedImage = await newPdf.embedPng(ab);
+        } else {
+          try {
+            embeddedImage = await newPdf.embedJpg(ab);
+          } catch (e) {
+            // Fallback for webp/other formats via canvas conversion
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            const img = new Image();
+            await new Promise((res) => { img.onload = res; img.src = item.dataUrl; });
+            canvas.width = img.width;
+            canvas.height = img.height;
+            ctx?.drawImage(img, 0, 0);
+            const jpegDataUrl = canvas.toDataURL('image/jpeg', 0.92);
+            const base64Data = jpegDataUrl.split(',')[1];
+            const binaryStr = window.atob(base64Data);
+            const len = binaryStr.length;
+            const bytes = new Uint8Array(len);
+            for (let i = 0; i < len; i++) bytes[i] = binaryStr.charCodeAt(i);
+            embeddedImage = await newPdf.embedJpg(bytes);
+          }
+        }
+
+        let pageWidth = item.width;
+        let pageHeight = item.height;
+
+        if (jpgPageSize === 'a4') {
+          pageWidth = 595.28;
+          pageHeight = 841.89;
+        } else if (jpgPageSize === 'letter') {
+          pageWidth = 612;
+          pageHeight = 792;
+        }
+
+        if (jpgOrientation === 'landscape' && pageWidth < pageHeight) {
+          const temp = pageWidth;
+          pageWidth = pageHeight;
+          pageHeight = temp;
+        } else if (jpgOrientation === 'portrait' && pageWidth > pageHeight) {
+          const temp = pageWidth;
+          pageWidth = pageHeight;
+          pageHeight = temp;
+        }
+
+        const page = newPdf.addPage([pageWidth, pageHeight]);
+        const margin = jpgMargin;
+        const availW = Math.max(10, pageWidth - margin * 2);
+        const availH = Math.max(10, pageHeight - margin * 2);
+        const scale = Math.min(availW / embeddedImage.width, availH / embeddedImage.height);
+        const drawW = embeddedImage.width * scale;
+        const drawH = embeddedImage.height * scale;
+        const x = (pageWidth - drawW) / 2;
+        const y = (pageHeight - drawH) / 2;
+
+        page.drawImage(embeddedImage, {
+          x,
+          y,
+          width: drawW,
+          height: drawH,
+          rotate: degrees(item.rotation)
+        });
+      }
+
+      const pdfBytes = await saveAndEncryptPdf(newPdf);
+      await downloadBlob(pdfBytes, 'BagiPDF_Image_Converted.pdf');
+    } catch (err: any) {
+      alert('Gagal mengonversi Gambar ke PDF: ' + err.message);
+    } finally {
+      setLoading(false);
+      setStatusMsg('');
+    }
+  };
+
   const handleExecuteSplit = async () => {
     if (!file || !pdfDoc) return;
     setLoading(true);
@@ -609,8 +1025,7 @@ export default function App() {
         if (mergeCustom) {
           const newPdf = await PDFDocument.create();
           for (const range of ranges) {
-            const copiedPages = await newPdf.copyPages(pdfDoc, range);
-            copiedPages.forEach(p => newPdf.addPage(p));
+            await copyPagesWithRotation(newPdf, pdfDoc, range);
           }
           const pdfBytes = await saveAndEncryptPdf(newPdf);
           await downloadBlob(pdfBytes, `${baseName}_custom_merged.pdf`);
@@ -619,8 +1034,7 @@ export default function App() {
         } else {
           for (let idx = 0; idx < ranges.length; idx++) {
             const newPdf = await PDFDocument.create();
-            const copiedPages = await newPdf.copyPages(pdfDoc, ranges[idx]);
-            copiedPages.forEach(p => newPdf.addPage(p));
+            await copyPagesWithRotation(newPdf, pdfDoc, ranges[idx]);
             const pdfBytes = await saveAndEncryptPdf(newPdf);
             generatedFiles.push({ name: `${baseName}_range_${idx + 1}.pdf`, bytes: pdfBytes });
           }
@@ -631,8 +1045,7 @@ export default function App() {
         for (let i = 0; i < totalPages; i += step) {
           const range = Array.from({ length: Math.min(step, totalPages - i) }, (_, k) => i + k);
           const newPdf = await PDFDocument.create();
-          const copiedPages = await newPdf.copyPages(pdfDoc, range);
-          copiedPages.forEach(p => newPdf.addPage(p));
+          await copyPagesWithRotation(newPdf, pdfDoc, range);
           const pdfBytes = await saveAndEncryptPdf(newPdf);
           generatedFiles.push({ name: `${baseName}_part_${part}.pdf`, bytes: pdfBytes });
           part++;
@@ -641,8 +1054,7 @@ export default function App() {
         if (extractMode === 'all') {
           for (let i = 0; i < totalPages; i++) {
             const newPdf = await PDFDocument.create();
-            const copiedPages = await newPdf.copyPages(pdfDoc, [i]);
-            copiedPages.forEach(p => newPdf.addPage(p));
+            await copyPagesWithRotation(newPdf, pdfDoc, [i]);
             const pdfBytes = await saveAndEncryptPdf(newPdf);
             generatedFiles.push({ name: `${baseName}_page_${i + 1}.pdf`, bytes: pdfBytes });
           }
@@ -652,8 +1064,7 @@ export default function App() {
 
           if (mergeExtract) {
             const newPdf = await PDFDocument.create();
-            const copiedPages = await newPdf.copyPages(pdfDoc, flatIndices);
-            copiedPages.forEach(p => newPdf.addPage(p));
+            await copyPagesWithRotation(newPdf, pdfDoc, flatIndices);
             const pdfBytes = await saveAndEncryptPdf(newPdf);
             await downloadBlob(pdfBytes, `${baseName}_extracted.pdf`);
             setLoading(false);
@@ -661,8 +1072,7 @@ export default function App() {
           } else {
             for (const idx of flatIndices) {
               const newPdf = await PDFDocument.create();
-              const copiedPages = await newPdf.copyPages(pdfDoc, [idx]);
-              copiedPages.forEach(p => newPdf.addPage(p));
+              await copyPagesWithRotation(newPdf, pdfDoc, [idx]);
               const pdfBytes = await saveAndEncryptPdf(newPdf);
               generatedFiles.push({ name: `${baseName}_page_${idx + 1}.pdf`, bytes: pdfBytes });
             }
@@ -679,8 +1089,7 @@ export default function App() {
         for (let i = 0; i < totalPages; i += pagesPerChunk) {
           const chunkIndices = Array.from({ length: Math.min(pagesPerChunk, totalPages - i) }, (_, k) => i + k);
           const chunkPdf = await PDFDocument.create();
-          const copiedPages = await chunkPdf.copyPages(pdfDoc, chunkIndices);
-          copiedPages.forEach(p => chunkPdf.addPage(p));
+          await copyPagesWithRotation(chunkPdf, pdfDoc, chunkIndices);
           
           const chunkBytes = await saveAndEncryptPdf(chunkPdf);
           generatedFiles.push({ name: `${baseName}_size_part_${part}.pdf`, bytes: chunkBytes });
@@ -722,7 +1131,8 @@ export default function App() {
           id: Math.random().toString(36).substring(2, 9),
           file: f,
           totalPages: doc.getPageCount(),
-          sizeMB: (f.size / (1024 * 1024)).toFixed(2)
+          sizeMB: (f.size / (1024 * 1024)).toFixed(2),
+          rotation: 0,
         });
       } catch (err) {
         console.warn('Gagal membaca PDF:', f.name, err);
@@ -742,6 +1152,17 @@ export default function App() {
     updated[index] = updated[targetIndex];
     updated[targetIndex] = temp;
     setMergeFiles(updated);
+  };
+
+  const rotateMergeFile = (index: number, delta: number) => {
+    setMergeFiles(prev => {
+      const updated = [...prev];
+      const currentRot = updated[index].rotation || 0;
+      let newRot = (currentRot + delta) % 360;
+      if (newRot < 0) newRot += 360;
+      updated[index] = { ...updated[index], rotation: newRot };
+      return updated;
+    });
   };
 
   const removeMergeFile = (index: number) => {
@@ -764,7 +1185,14 @@ export default function App() {
         const srcDoc = await PDFDocument.load(arrayBuffer, { ignoreEncryption: false });
         const pageIndices = srcDoc.getPageIndices();
         const copiedPages = await mergedPdf.copyPages(srcDoc, pageIndices);
-        copiedPages.forEach(p => mergedPdf.addPage(p));
+        const rot = item.rotation || 0;
+        copiedPages.forEach(p => {
+          if (rot !== 0) {
+            const currentRot = p.getRotation().angle;
+            p.setRotation(degrees((currentRot + rot) % 360));
+          }
+          mergedPdf.addPage(p);
+        });
       }
 
       const mergedBytes = await saveAndEncryptPdf(mergedPdf);
@@ -1106,7 +1534,7 @@ export default function App() {
         'File Name'
       ]);
     } else {
-      consolidatedRows.push(['Nama File PDF', 'Halaman', 'Kolom 1 / Konten Teks', 'Position Y', 'Position X']);
+      consolidatedRows.push(['Nama File PDF', 'Halaman', 'Kolom 1', 'Kolom 2', 'Kolom 3', 'Kolom 4', 'Kolom 5', 'Kolom 6', 'Kolom 7', 'Kolom 8', 'Kolom 9', 'Kolom 10']);
     }
 
     const updatedBatchItems = [...items];
@@ -1152,25 +1580,72 @@ export default function App() {
             // Explicitly release memory immediately for large generic PDFs
             try { page.cleanup(); } catch (e) {}
 
-            const items = textContent.items as any[];
-            const lineMap: { [y: number]: any[] } = {};
+            const rawItems = (textContent.items as any[]).filter(it => it.str && it.str.trim().length > 0);
+            if (rawItems.length === 0) continue;
 
-            for (const it of items) {
-              if (!it.str || !it.str.trim()) continue;
-              const y = Math.round(it.transform[5] / 10) * 10;
-              if (!lineMap[y]) lineMap[y] = [];
-              lineMap[y].push(it);
+            // 1. Group into lines (Y-axis tolerance 4pt)
+            const itemsSortedY = [...rawItems].sort((a, b) => {
+              const dY = b.transform[5] - a.transform[5];
+              if (Math.abs(dY) > 3) return dY;
+              return a.transform[4] - b.transform[4];
+            });
+
+            const lines: any[][] = [];
+            for (const item of itemsSortedY) {
+              const y = item.transform[5];
+              let addedToLine = false;
+              for (const line of lines) {
+                const lineY = line[0].transform[5];
+                if (Math.abs(lineY - y) <= 4) {
+                  line.push(item);
+                  addedToLine = true;
+                  break;
+                }
+              }
+              if (!addedToLine) {
+                lines.push([item]);
+              }
             }
 
-            const sortedYs = Object.keys(lineMap).map(Number).sort((a, b) => b - a);
+            // 2. Identify global X column positions across the page
+            const xPositions: number[] = [];
+            for (const item of rawItems) {
+              const x = item.transform[4];
+              const existing = xPositions.find(px => Math.abs(px - x) <= 12);
+              if (existing === undefined) {
+                xPositions.push(x);
+              }
+            }
+            xPositions.sort((a, b) => a - b);
 
-            for (const y of sortedYs) {
-              const rowItems = lineMap[y];
-              rowItems.sort((a, b) => a.transform[4] - b.transform[4]);
-              const rowValues = rowItems.map(it => {
-                const str = it.str.trim();
-                return sanitizeFormulas ? sanitizeExcelCell(str) : str;
-              });
+            const getColIndex = (x: number) => {
+              let bestIdx = 0;
+              let minDiff = Infinity;
+              for (let i = 0; i < xPositions.length; i++) {
+                const diff = Math.abs(xPositions[i] - x);
+                if (diff < minDiff) {
+                  minDiff = diff;
+                  bestIdx = i;
+                }
+              }
+              return bestIdx;
+            };
+
+            // 3. Build layout-preserved grid rows
+            for (const line of lines) {
+              line.sort((a, b) => a.transform[4] - b.transform[4]);
+              const rowValues = new Array(xPositions.length).fill('');
+              for (const item of line) {
+                const colIdx = getColIndex(item.transform[4]);
+                const cleanStr = item.str.trim();
+                const finalVal = sanitizeFormulas ? sanitizeExcelCell(cleanStr) : cleanStr;
+                
+                if (rowValues[colIdx]) {
+                  rowValues[colIdx] += ' ' + finalVal;
+                } else {
+                  rowValues[colIdx] = finalVal;
+                }
+              }
 
               const rowData = [item.file.name, `Halaman ${p}`, ...rowValues];
               fileRows.push(rowData);
@@ -1178,10 +1653,6 @@ export default function App() {
             }
           }
         }
-
-        try {
-          pdfJsDoc.destroy();
-        } catch (e) {}
 
         item.status = 'success';
         item.pageCount = pageCount;
@@ -1415,7 +1886,7 @@ export default function App() {
           canvas.height = viewport.height;
 
           if (context) {
-            await page.render({ canvasContext: context, viewport }).promise;
+            await page.render({ canvas, canvasContext: context, viewport }).promise;
             const imgDataUrl = canvas.toDataURL('image/png', 1.0);
             const pngImage = await unlockedPdfDoc.embedPng(imgDataUrl);
 
@@ -1445,10 +1916,133 @@ export default function App() {
     }
   };
 
+  const createFileFromPath = async (filePath: string): Promise<File | null> => {
+    try {
+      const { convertFileSrc } = await import('@tauri-apps/api/core');
+      const assetUrl = convertFileSrc(filePath);
+      const res = await fetch(assetUrl);
+      const blob = await res.blob();
+      const fileName = filePath.split('/').pop()?.split('\\').pop() || 'file';
+      return new File([blob], fileName, { type: blob.type || 'application/octet-stream' });
+    } catch (err) {
+      console.warn('Failed to read file path:', filePath, err);
+      return null;
+    }
+  };
+
+  const processDroppedFiles = async (droppedFiles: File[]) => {
+    if (mainTool === 'split' || mainTool === 'lock' || mainTool === 'watermark' || mainTool === 'edit') {
+      const pdfFile = droppedFiles.find(f => f.name.toLowerCase().endsWith('.pdf'));
+      if (pdfFile) {
+        setFile(pdfFile);
+        loadPdf(pdfFile);
+        showToastNotification('File Dimuat', `Berhasil memuat ${pdfFile.name}`, 'success');
+      } else {
+        showToastNotification('Pilih File PDF', 'Harap drop berkas berformat .pdf!', 'error');
+      }
+    } else if (mainTool === 'merge') {
+      const pdfFiles = droppedFiles.filter(f => f.name.toLowerCase().endsWith('.pdf'));
+      if (pdfFiles.length > 0) {
+        const dummyEvent = { target: { files: pdfFiles } } as any;
+        handleMergeFilesAdd(dummyEvent);
+        showToastNotification('Merge PDF', `Berhasil menambahkan ${pdfFiles.length} file PDF.`, 'success');
+      }
+    } else if (mainTool === 'jpg2pdf' || mainTool === 'jpg2excel') {
+      const imgFiles = droppedFiles.filter(f => f.type.startsWith('image/') || /\.(jpg|jpeg|png|webp)$/i.test(f.name));
+      if (imgFiles.length > 0) {
+        const dummyEvent = { target: { files: imgFiles } } as any;
+        await handleJpgFilesAdd(dummyEvent);
+        showToastNotification('Gambar Dimuat', `Berhasil menambahkan ${imgFiles.length} berkas gambar.`, 'success');
+      } else {
+        showToastNotification('Pilih Berkas Gambar', 'Harap drop berkas gambar JPG/PNG/WEBP!', 'error');
+      }
+    } else if (mainTool === 'excel') {
+      const pdfFiles = droppedFiles.filter(f => f.name.toLowerCase().endsWith('.pdf'));
+      if (pdfFiles.length > 0) {
+        const dummyEvent = { target: { files: pdfFiles } } as any;
+        handleBatchFilesSelect(dummyEvent);
+        showToastNotification('Batch PDF to Excel', `Berhasil menambahkan ${pdfFiles.length} file PDF.`, 'success');
+      }
+    }
+  };
+
+  React.useEffect(() => {
+    let unlistenFn: (() => void) | null = null;
+
+    if ('__TAURI_INTERNALS__' in window || '__TAURI__' in window) {
+      import('@tauri-apps/api/event').then(({ listen }) => {
+        listen<{ paths: string[] }>('tauri://drag-drop', async (event) => {
+          try {
+            const paths = event.payload.paths;
+            if (paths && paths.length > 0) {
+              setLoading(true);
+              setStatusMsg('Membaca berkas...');
+              const fileObjects: File[] = [];
+              for (const p of paths) {
+                const f = await createFileFromPath(p);
+                if (f) fileObjects.push(f);
+              }
+              setLoading(false);
+              setStatusMsg('');
+              if (fileObjects.length > 0) {
+                processDroppedFiles(fileObjects);
+              }
+            }
+          } catch (err) {
+            console.warn('Tauri drag-drop handler error:', err);
+          }
+        }).then(unlisten => { unlistenFn = unlisten; }).catch(err => console.warn('Tauri drag-drop listen error:', err));
+      }).catch(err => console.warn('Tauri drag-drop import error:', err));
+    }
+
+    const onWindowDragOver = (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.dataTransfer) {
+        e.dataTransfer.dropEffect = 'copy';
+      }
+    };
+
+    const onWindowDrop = async (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      const files: File[] = [];
+      if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
+        files.push(...Array.from(e.dataTransfer.files));
+      } else if (e.dataTransfer?.items) {
+        for (let i = 0; i < e.dataTransfer.items.length; i++) {
+          const item = e.dataTransfer.items[i];
+          if (item.kind === 'file') {
+            const file = item.getAsFile();
+            if (file) files.push(file);
+          }
+        }
+      }
+
+      if (files.length > 0) {
+        try {
+          processDroppedFiles(files);
+        } catch (err) {
+          console.warn('Window drop handler error:', err);
+        }
+      }
+    };
+
+    window.addEventListener('dragover', onWindowDragOver);
+    window.addEventListener('drop', onWindowDrop);
+
+    return () => {
+      if (unlistenFn) unlistenFn();
+      window.removeEventListener('dragover', onWindowDragOver);
+      window.removeEventListener('drop', onWindowDrop);
+    };
+  }, []);
+
   // IP Access Control Restriction Block
   if (isIpAuthorized === false) {
     return (
-      <div className="min-h-screen bg-[#121216] text-slate-200 flex flex-col items-center justify-center p-6 font-sans select-none antialiased">
+      <div className="h-full bg-[#121216] text-slate-200 flex flex-col items-center justify-center p-6 font-sans select-none antialiased">
         <div className="max-w-md w-full bg-[#1E1E28] border border-red-500/40 rounded-2xl p-8 text-center shadow-2xl backdrop-blur-xl flex flex-col items-center gap-4">
           <div className="w-16 h-16 rounded-full bg-red-500/10 border border-red-500/30 flex items-center justify-center text-red-500 shadow-inner">
             <AlertCircle className="w-8 h-8" />
@@ -1478,7 +2072,11 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-[#1E1E24] text-slate-200 flex flex-col font-sans select-none antialiased relative">
+    <div 
+      className="h-full bg-[#1E1E24] text-slate-200 flex flex-col font-sans select-none antialiased relative"
+      onDragOver={(e) => e.preventDefault()}
+      onDrop={(e) => e.preventDefault()}
+    >
       {/* Toast Notification Banner */}
       {toast && toast.show && (
         <div className="fixed top-14 right-5 z-50 max-w-sm bg-slate-900/95 border border-emerald-500/50 text-white p-4 rounded-xl shadow-2xl backdrop-blur-md flex items-start gap-3 animate-in fade-in slide-in-from-top-4 duration-300">
@@ -1499,7 +2097,7 @@ export default function App() {
       )}
 
       {/* macOS Style Header Bar */}
-      <header className="h-12 bg-[#2B2B36]/80 backdrop-blur-md border-b border-slate-700/50 px-4 flex items-center justify-between shadow-sm drag flex-shrink-0">
+      <header className="h-12 bg-[#2B2B36]/80 backdrop-blur-md border-b border-slate-700/50 px-4 flex items-center justify-between shadow-sm drag flex-shrink-0 relative z-50">
         {/* Left: Window Control Dots */}
         <div className="flex items-center space-x-2 w-24">
           <div className="w-3 h-3 rounded-full bg-[#FF5F56] border border-[#E0443E] hover:opacity-80 transition cursor-pointer"></div>
@@ -1551,13 +2149,59 @@ export default function App() {
               <Edit3 className="w-3.5 h-3.5" />
               <span>Edit PDF</span>
             </button>
-            <button 
-              onClick={() => setMainTool('excel')}
-              className={`flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-md transition ${mainTool === 'excel' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}
-            >
-              <FileSpreadsheet className="w-3.5 h-3.5" />
-              <span>PDF to Excel</span>
-            </button>
+
+            {/* Converters Dropdown Menu */}
+            <div className="relative">
+              <button 
+                onClick={() => setConvertDropdownOpen(!convertDropdownOpen)}
+                className={`flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-md transition ${
+                  ['excel', 'jpg2excel', 'jpg2pdf'].includes(mainTool) 
+                    ? 'bg-indigo-600 text-white shadow-sm' 
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <FileSpreadsheet className="w-3.5 h-3.5" />
+                <span>Konversi Alat</span>
+                <ChevronDown className={`w-3 h-3 transition-transform ${convertDropdownOpen ? 'rotate-180' : ''}`} />
+              </button>
+
+              {convertDropdownOpen && (
+                <div 
+                  className="absolute right-0 mt-2 w-48 bg-[#23232D] border border-slate-700/80 rounded-lg shadow-2xl py-1.5 z-50 animate-in fade-in zoom-in-95 duration-100"
+                  onMouseLeave={() => setConvertDropdownOpen(false)}
+                >
+                  <button
+                    onClick={() => { setMainTool('excel'); setConvertDropdownOpen(false); }}
+                    className={`w-full text-left px-3.5 py-2 text-xs flex items-center gap-2 transition ${
+                      mainTool === 'excel' ? 'bg-indigo-600/30 text-indigo-200 font-semibold' : 'text-slate-300 hover:bg-slate-700/60 hover:text-white'
+                    }`}
+                  >
+                    <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
+                    <span>PDF to Excel</span>
+                  </button>
+
+                  <button
+                    onClick={() => { setMainTool('jpg2excel'); setConvertDropdownOpen(false); }}
+                    className={`w-full text-left px-3.5 py-2 text-xs flex items-center gap-2 transition ${
+                      mainTool === 'jpg2excel' ? 'bg-indigo-600/30 text-indigo-200 font-semibold' : 'text-slate-300 hover:bg-slate-700/60 hover:text-white'
+                    }`}
+                  >
+                    <FileImage className="w-4 h-4 text-amber-400" />
+                    <span>JPG to Excel</span>
+                  </button>
+
+                  <button
+                    onClick={() => { setMainTool('jpg2pdf'); setConvertDropdownOpen(false); }}
+                    className={`w-full text-left px-3.5 py-2 text-xs flex items-center gap-2 transition ${
+                      mainTool === 'jpg2pdf' ? 'bg-indigo-600/30 text-indigo-200 font-semibold' : 'text-slate-300 hover:bg-slate-700/60 hover:text-white'
+                    }`}
+                  >
+                    <ImageIcon className="w-4 h-4 text-cyan-400" />
+                    <span>JPG to PDF</span>
+                  </button>
+                </div>
+              )}
+            </div>
           </nav>
         </div>
 
@@ -1713,12 +2357,48 @@ export default function App() {
               <div className="flex-1 p-5 overflow-y-auto bg-[#181820]">
                 {thumbnails.length > 0 && (
                   <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3.5">
-                    {thumbnails.map(thumb => (
-                      <div key={thumb.pageIndex} className="bg-[#23232D] border border-slate-700/50 rounded-lg p-2.5 flex flex-col items-center gap-2">
-                        <img src={thumb.dataUrl} alt={`Halaman ${thumb.pageIndex + 1}`} className="object-contain w-full h-full rounded border border-slate-800" />
-                        <span className="text-[10px] text-slate-300">Halaman {thumb.pageIndex + 1}</span>
-                      </div>
-                    ))}
+                    {thumbnails.map(thumb => {
+                      const rot = pageRotations[thumb.pageIndex] || 0;
+                      return (
+                        <div key={thumb.pageIndex} className="bg-[#23232D] border border-slate-700/50 rounded-lg p-2.5 flex flex-col items-center gap-2 relative group hover:border-indigo-500/50 transition">
+                          <div className="w-full h-40 flex items-center justify-center overflow-hidden relative">
+                            <img 
+                              src={thumb.dataUrl} 
+                              alt={`Halaman ${thumb.pageIndex + 1}`} 
+                              className="object-contain max-h-full max-w-full rounded border border-slate-800 transition-transform duration-200" 
+                              style={{ transform: `rotate(${rot}deg)` }}
+                            />
+                            {rot !== 0 && (
+                              <span className="absolute top-1 right-1 bg-indigo-600 text-white text-[9px] font-bold px-1.5 py-0.5 rounded shadow">
+                                {rot}°
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="flex items-center justify-between w-full pt-1 border-t border-slate-800">
+                            <span className="text-[10px] text-slate-300 font-medium">Halaman {thumb.pageIndex + 1}</span>
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => handleRotatePage(thumb.pageIndex, -90)}
+                                className="p-1 hover:bg-slate-700 rounded text-slate-400 hover:text-white transition"
+                                title="Putar Kiri (-90°)"
+                              >
+                                <RotateCcw className="w-3 h-3" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleRotatePage(thumb.pageIndex, 90)}
+                                className="p-1 hover:bg-slate-700 rounded text-slate-400 hover:text-white transition"
+                                title="Putar Kanan (+90°)"
+                              >
+                                <RotateCw className="w-3 h-3" />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -1781,6 +2461,19 @@ export default function App() {
                       </div>
 
                       <div className="flex items-center gap-1.5">
+                        {item.rotation !== undefined && item.rotation !== 0 && (
+                          <span className="text-[10px] font-bold text-indigo-300 bg-indigo-500/20 px-1.5 py-0.5 rounded border border-indigo-500/40">
+                            {item.rotation}°
+                          </span>
+                        )}
+                        <button 
+                          type="button"
+                          onClick={() => rotateMergeFile(idx, 90)} 
+                          className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-indigo-400 hover:text-indigo-200 transition"
+                          title="Putar Dokumen (+90°)"
+                        >
+                          <RotateCw className="w-3.5 h-3.5" />
+                        </button>
                         <button disabled={idx === 0} onClick={() => moveMergeFile(idx, 'up')} className="p-1 rounded bg-slate-800 hover:bg-slate-700 disabled:opacity-30 text-slate-300">
                           <ArrowUp className="w-3.5 h-3.5" />
                         </button>
@@ -1795,6 +2488,450 @@ export default function App() {
                   ))}
                 </div>
               )}
+            </section>
+          </div>
+        )}
+
+        {/* --- DEDICATED ROTATE PDF SUITE --- */}
+        {mainTool === 'rotate' && (
+          <>
+            <aside className="w-[340px] bg-[#2B2B36]/90 border border-slate-700/40 rounded-xl p-4 flex flex-col gap-4 shadow-xl backdrop-blur-xl flex-shrink-0 overflow-y-auto">
+              <div className="flex items-center gap-2 border-b border-slate-700/50 pb-3">
+                <RotateCw className="w-5 h-5 text-indigo-400" />
+                <div>
+                  <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wider">Rotate PDF</h3>
+                  <p className="text-[11px] text-slate-400">Putar Orientasi Halaman PDF</p>
+                </div>
+              </div>
+
+              <div 
+                onClick={() => fileInputRef.current?.click()}
+                className={`border border-dashed rounded-xl p-4 transition-all cursor-pointer text-center flex flex-col items-center justify-center gap-2.5 ${
+                  file ? 'border-indigo-500/50 bg-indigo-500/10 hover:bg-indigo-500/15' : 'border-slate-600/60 bg-slate-800/40 hover:bg-slate-800/70 hover:border-slate-500'
+                }`}
+              >
+                <div className={`w-10 h-10 rounded-full flex items-center justify-center transition shadow-inner ${file ? 'bg-indigo-500 text-white' : 'bg-slate-700/70 text-slate-300'}`}>
+                  <UploadCloud className="w-5 h-5" />
+                </div>
+                {file ? (
+                  <div className="w-full">
+                    <p className="font-medium text-xs text-indigo-200 truncate max-w-[260px] mx-auto">{file.name}</p>
+                    <p className="text-[11px] text-slate-400 mt-0.5">{totalPages} Halaman • {(file.size / (1024*1024)).toFixed(2)} MB</p>
+                  </div>
+                ) : (
+                  <div>
+                    <p className="font-semibold text-xs text-slate-200">Pilih File PDF</p>
+                    <p className="text-[11px] text-slate-400 mt-0.5">Klik untuk memilih dokumen PDF</p>
+                  </div>
+                )}
+              </div>
+
+              {file && (
+                <div className="space-y-3 pt-2">
+                  <label className="text-xs font-semibold text-slate-300 block border-b border-slate-700/50 pb-1.5">
+                    Aksi Rotasi Massal (Bulk Rotation)
+                  </label>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleRotateAll(-90)}
+                      className="flex items-center justify-center gap-1.5 bg-slate-800/80 hover:bg-slate-700 border border-slate-700 text-slate-200 px-3 py-2 rounded-lg text-xs font-medium transition"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5 text-indigo-400" />
+                      <span>Putar Kiri (-90°)</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleRotateAll(90)}
+                      className="flex items-center justify-center gap-1.5 bg-slate-800/80 hover:bg-slate-700 border border-slate-700 text-slate-200 px-3 py-2 rounded-lg text-xs font-medium transition"
+                    >
+                      <RotateCw className="w-3.5 h-3.5 text-indigo-400" />
+                      <span>Putar Kanan (+90°)</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleRotateAll(180)}
+                      className="flex items-center justify-center gap-1.5 bg-slate-800/80 hover:bg-slate-700 border border-slate-700 text-slate-200 px-3 py-2 rounded-lg text-xs font-medium transition"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5 text-amber-400" />
+                      <span>Balik (180°)</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleResetRotations}
+                      className="flex items-center justify-center gap-1.5 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 text-red-300 px-3 py-2 rounded-lg text-xs font-medium transition"
+                    >
+                      <Trash2 className="w-3.5 h-3.5 text-red-400" />
+                      <span>Reset Rotasi</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex-1 flex flex-col justify-end">
+                <button
+                  disabled={!file || loading}
+                  onClick={handleExecuteRotate}
+                  className="w-full bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 text-white font-semibold py-2.5 px-4 rounded-xl text-xs flex items-center justify-center gap-2 shadow-lg disabled:opacity-40 disabled:cursor-not-allowed transition"
+                >
+                  {loading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-4 h-4" />}
+                  <span>Simpan Hasil Rotasi PDF</span>
+                </button>
+              </div>
+            </aside>
+
+            {/* Rotate Visual Preview */}
+            <section className="flex-1 bg-[#2B2B36]/90 border border-slate-700/40 rounded-xl flex flex-col overflow-hidden shadow-xl backdrop-blur-xl">
+              <div className="bg-slate-900/60 px-5 py-2.5 border-b border-slate-700/50 flex items-center justify-between">
+                <h2 className="text-xs font-semibold text-slate-300 flex items-center gap-2">
+                  <Grid className="w-3.5 h-3.5 text-indigo-400" /> Pratinjau Rotasi Halaman
+                </h2>
+                {totalPages > 0 && (
+                  <span className="text-[11px] text-slate-400 bg-slate-800/80 px-2.5 py-0.5 rounded-md border border-slate-700/60">
+                    {totalPages} Halaman
+                  </span>
+                )}
+              </div>
+              <div className="flex-1 p-5 overflow-y-auto bg-[#181820]">
+                {thumbnails.length > 0 ? (
+                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3.5">
+                    {thumbnails.map(thumb => {
+                      const rot = pageRotations[thumb.pageIndex] || 0;
+                      return (
+                        <div key={thumb.pageIndex} className="bg-[#23232D] border border-slate-700/50 rounded-lg p-2.5 flex flex-col items-center gap-2 relative group hover:border-indigo-500/50 transition">
+                          <div className="w-full h-40 flex items-center justify-center overflow-hidden relative">
+                            <img 
+                              src={thumb.dataUrl} 
+                              alt={`Halaman ${thumb.pageIndex + 1}`} 
+                              className="object-contain max-h-full max-w-full rounded border border-slate-800 transition-transform duration-200" 
+                              style={{ transform: `rotate(${rot}deg)` }}
+                            />
+                            {rot !== 0 && (
+                              <span className="absolute top-1 right-1 bg-indigo-600 text-white text-[9px] font-bold px-1.5 py-0.5 rounded shadow">
+                                {rot}°
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="flex items-center justify-between w-full pt-1 border-t border-slate-800">
+                            <span className="text-[10px] text-slate-300 font-medium">Halaman {thumb.pageIndex + 1}</span>
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => handleRotatePage(thumb.pageIndex, -90)}
+                                className="p-1 hover:bg-slate-700 rounded text-slate-400 hover:text-white transition"
+                                title="Putar Kiri (-90°)"
+                              >
+                                <RotateCcw className="w-3 h-3" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleRotatePage(thumb.pageIndex, 90)}
+                                className="p-1 hover:bg-slate-700 rounded text-slate-400 hover:text-white transition"
+                                title="Putar Kanan (+90°)"
+                              >
+                                <RotateCw className="w-3 h-3" />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="h-full flex flex-col items-center justify-center text-slate-500 border border-dashed border-slate-700/60 rounded-xl bg-slate-900/20 p-8">
+                    <RotateCw className="w-12 h-12 text-slate-600 mb-2" />
+                    <p className="text-xs font-medium text-slate-300">Belum Ada File PDF Dipilih</p>
+                    <p className="text-[11px] text-slate-500 mt-1">Pilih file PDF di panel sebelah kiri untuk mulai memutar halaman.</p>
+                  </div>
+                )}
+              </div>
+            </section>
+          </>
+        )}
+
+        {/* --- JPG TO PDF SUITE --- */}
+        {mainTool === 'jpg2pdf' && (
+          <>
+            <aside className="w-[340px] bg-[#2B2B36]/90 border border-slate-700/40 rounded-xl p-4 flex flex-col gap-4 shadow-xl backdrop-blur-xl flex-shrink-0 overflow-y-auto">
+              <div className="flex items-center gap-2 border-b border-slate-700/50 pb-3">
+                <ImageIcon className="w-5 h-5 text-cyan-400" />
+                <div>
+                  <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wider">JPG to PDF</h3>
+                  <p className="text-[11px] text-slate-400">Konversi Gambar JPG/PNG ke Dokumen PDF</p>
+                </div>
+              </div>
+
+              {/* Dual Input Buttons: Folder or Files */}
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => jpgFolderInputRef.current?.click()}
+                  className="bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-500/40 text-indigo-200 py-2.5 px-2 rounded-xl text-xs font-medium flex items-center justify-center gap-1.5 transition shadow-xs"
+                >
+                  <Folder className="w-3.5 h-3.5 text-indigo-400" />
+                  <span>Pilih Folder</span>
+                </button>
+                <button
+                  onClick={() => jpgInputRef.current?.click()}
+                  className="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 py-2.5 px-2 rounded-xl text-xs font-medium flex items-center justify-center gap-1.5 transition shadow-xs"
+                >
+                  <Plus className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>Pilih Gambar</span>
+                </button>
+              </div>
+              <input
+                ref={jpgFolderInputRef}
+                type="file"
+                // @ts-ignore
+                webkitdirectory="true"
+                multiple
+                onChange={handleJpgFolderSelect}
+                className="hidden"
+              />
+              <input ref={jpgInputRef} type="file" accept="image/*" multiple onChange={handleJpgFilesAdd} className="hidden" />
+
+              <div className="space-y-3 bg-slate-900/50 p-3 rounded-xl border border-slate-700/50">
+                <label className="text-xs font-semibold text-slate-300 block border-b border-slate-800 pb-1.5">
+                  Pengaturan Halaman PDF
+                </label>
+
+                <div className="space-y-1">
+                  <label className="text-[11px] text-slate-400">Ukuran Halaman:</label>
+                  <select 
+                    value={jpgPageSize} 
+                    onChange={(e) => setJpgPageSize(e.target.value as any)}
+                    className="w-full bg-[#16161C] text-slate-100 border border-slate-700/80 rounded-lg px-2.5 py-1.5 text-xs font-medium cursor-pointer focus:outline-none focus:border-cyan-500"
+                  >
+                    <option value="auto" className="bg-[#16161C] text-slate-100">Auto (Sesuai Ukuran Gambar)</option>
+                    <option value="a4" className="bg-[#16161C] text-slate-100">A4 (Standard Document)</option>
+                    <option value="letter" className="bg-[#16161C] text-slate-100">US Letter</option>
+                  </select>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[11px] text-slate-400">Orientasi Halaman:</label>
+                  <select 
+                    value={jpgOrientation} 
+                    onChange={(e) => setJpgOrientation(e.target.value as any)}
+                    className="w-full bg-[#16161C] text-slate-100 border border-slate-700/80 rounded-lg px-2.5 py-1.5 text-xs font-medium cursor-pointer focus:outline-none focus:border-cyan-500"
+                  >
+                    <option value="auto" className="bg-[#16161C] text-slate-100">Auto (Ikuti Gambar)</option>
+                    <option value="portrait" className="bg-[#16161C] text-slate-100">Portrait (Tegak)</option>
+                    <option value="landscape" className="bg-[#16161C] text-slate-100">Landscape (Mendatar)</option>
+                  </select>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[11px] text-slate-400">Margin Gambar (px):</label>
+                  <input 
+                    type="number" 
+                    value={jpgMargin} 
+                    onChange={(e) => setJpgMargin(Number(e.target.value))}
+                    min={0}
+                    max={100}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-white"
+                  />
+                </div>
+              </div>
+
+              <div className="flex-1 flex flex-col justify-end">
+                <button
+                  disabled={jpgFiles.length === 0 || loading}
+                  onClick={handleExecuteJpgToPdf}
+                  className="w-full bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-semibold py-2.5 px-4 rounded-xl text-xs flex items-center justify-center gap-2 shadow-lg disabled:opacity-40 disabled:cursor-not-allowed transition"
+                >
+                  {loading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-4 h-4" />}
+                  <span>Proses & Simpan JPG to PDF</span>
+                </button>
+              </div>
+            </aside>
+
+            <section className="flex-1 bg-[#2B2B36]/90 border border-slate-700/40 rounded-xl flex flex-col overflow-hidden shadow-xl backdrop-blur-xl p-5">
+              <div className="flex items-center justify-between border-b border-slate-700/50 pb-3 mb-4">
+                <h2 className="text-xs font-semibold text-slate-300 flex items-center gap-2">
+                  <ImageIcon className="w-4 h-4 text-cyan-400" /> Daftar Berkas Gambar ({jpgFiles.length})
+                </h2>
+                {jpgFiles.length > 0 && (
+                  <button 
+                    onClick={() => setJpgFiles([])} 
+                    className="text-xs text-red-400 hover:text-red-300 flex items-center gap-1"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" /> Hapus Semua
+                  </button>
+                )}
+              </div>
+
+              <div className="flex-1 overflow-y-auto">
+                {jpgFiles.length > 0 ? (
+                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                    {jpgFiles.map((item, idx) => (
+                      <div key={item.id} className="bg-[#23232D] border border-slate-700/50 rounded-xl p-3 flex flex-col gap-2 relative group hover:border-cyan-500/50 transition">
+                        <div className="w-full h-36 flex items-center justify-center overflow-hidden bg-slate-950 rounded-lg relative">
+                          <img 
+                            src={item.dataUrl} 
+                            alt={item.file.name} 
+                            className="object-contain max-h-full max-w-full transition-transform duration-200"
+                            style={{ transform: `rotate(${item.rotation}deg)` }}
+                          />
+                          <span className="absolute top-1.5 left-1.5 bg-slate-900/80 text-cyan-300 text-[10px] font-bold px-2 py-0.5 rounded border border-slate-700">
+                            #{idx + 1}
+                          </span>
+                        </div>
+
+                        <p className="text-xs font-medium text-slate-200 truncate">{item.file.name}</p>
+                        <p className="text-[10px] text-slate-400">{item.width} x {item.height} px • {(item.file.size / 1024).toFixed(1)} KB</p>
+
+                        <div className="flex items-center justify-between pt-2 border-t border-slate-800">
+                          <div className="flex items-center gap-1">
+                            <button disabled={idx === 0} onClick={() => moveJpgFile(idx, 'up')} className="p-1 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 rounded text-slate-300">
+                              <ArrowUp className="w-3 h-3" />
+                            </button>
+                            <button disabled={idx === jpgFiles.length - 1} onClick={() => moveJpgFile(idx, 'down')} className="p-1 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 rounded text-slate-300">
+                              <ArrowDown className="w-3 h-3" />
+                            </button>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <button onClick={() => rotateJpgFile(idx, -90)} className="p-1 bg-slate-800 hover:bg-slate-700 rounded text-slate-300" title="Putar Kiri (-90°)">
+                              <RotateCcw className="w-3 h-3" />
+                            </button>
+                            <button onClick={() => rotateJpgFile(idx, 90)} className="p-1 bg-slate-800 hover:bg-slate-700 rounded text-slate-300" title="Putar Kanan (+90°)">
+                              <RotateCw className="w-3 h-3" />
+                            </button>
+                            <button onClick={() => removeJpgFile(idx)} className="p-1 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded">
+                              <Trash2 className="w-3 h-3" />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="h-full flex flex-col items-center justify-center text-slate-500 border border-dashed border-slate-700/60 rounded-xl bg-slate-900/20 p-8">
+                    <ImageIcon className="w-12 h-12 text-slate-600 mb-2" />
+                    <p className="text-xs font-medium text-slate-300">Belum Ada Berkas Gambar Dipilih</p>
+                    <p className="text-[11px] text-slate-500 mt-1">Pilih berkas JPG/PNG untuk dikonversi menjadi dokumen PDF.</p>
+                  </div>
+                )}
+              </div>
+            </section>
+          </>
+        )}
+
+        {/* --- JPG TO EXCEL SUITE --- */}
+        {mainTool === 'jpg2excel' && (
+          <div className="flex-1 flex gap-5">
+            <aside className="w-[360px] bg-[#2B2B36]/90 border border-slate-700/40 rounded-xl p-4 flex flex-col gap-4 shadow-xl backdrop-blur-xl flex-shrink-0">
+              <div className="flex items-center gap-2 border-b border-slate-700/50 pb-3">
+                <FileImage className="w-5 h-5 text-amber-400" />
+                <div>
+                  <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wider">JPG to Excel</h3>
+                  <p className="text-[11px] text-slate-400">Ekstraksi Tabel Gambar ke Excel</p>
+                </div>
+              </div>
+
+              {/* Dual Input Buttons: Folder or Files */}
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => jpgFolderInputRef.current?.click()}
+                  className="bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-500/40 text-indigo-200 py-2.5 px-2 rounded-xl text-xs font-medium flex items-center justify-center gap-1.5 transition shadow-xs"
+                >
+                  <Folder className="w-3.5 h-3.5 text-indigo-400" />
+                  <span>Pilih Folder</span>
+                </button>
+                <button
+                  onClick={() => jpgToExcelInputRef.current?.click()}
+                  className="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 py-2.5 px-2 rounded-xl text-xs font-medium flex items-center justify-center gap-1.5 transition shadow-xs"
+                >
+                  <Plus className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Pilih Gambar</span>
+                </button>
+              </div>
+              <input ref={jpgToExcelInputRef} type="file" accept="image/*" multiple onChange={handleJpgFilesAdd} className="hidden" />
+
+              <p className="text-[11px] text-slate-400 leading-relaxed">
+                Fitur ini membaca baris dan kolom tabel dari dokumen skenario berkas gambar (JPG/PNG) dan menyusunnya menjadi format lembar kerja Excel (.xlsx).
+              </p>
+
+              <div className="flex-1 flex flex-col justify-end">
+                <button
+                  disabled={jpgFiles.length === 0 || loading}
+                  onClick={handleExecuteJpgToExcel}
+                  className="w-full bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white font-semibold py-2.5 px-4 rounded-xl text-xs flex items-center justify-center gap-2 shadow-lg disabled:opacity-40 disabled:cursor-not-allowed transition"
+                >
+                  {loading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <FileSpreadsheet className="w-4 h-4" />}
+                  <span>Ekstrak Gambar ke Excel</span>
+                </button>
+              </div>
+            </aside>
+
+            <section className="flex-1 bg-[#2B2B36]/90 border border-slate-700/40 rounded-xl p-5 flex flex-col overflow-hidden shadow-xl backdrop-blur-xl">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-xs font-semibold text-slate-300 flex items-center gap-2">
+                  <FileImage className="w-4 h-4 text-amber-400" /> Berkas Gambar Terpilih ({jpgFiles.length})
+                </h2>
+                {jpgFiles.length > 0 && (
+                  <button
+                    onClick={() => setJpgFiles([])}
+                    className="text-[11px] text-red-400 hover:text-red-300 flex items-center gap-1 font-medium bg-red-500/10 hover:bg-red-500/20 px-2.5 py-1 rounded-lg transition border border-red-500/20"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" /> Hapus Semua
+                  </button>
+                )}
+              </div>
+
+              <div className="flex-1 overflow-y-auto">
+                {jpgFiles.length > 0 ? (
+                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                    {jpgFiles.map((item, idx) => (
+                      <div key={item.id} className="bg-[#23232D] border border-slate-700/50 rounded-xl p-3 flex flex-col gap-2 relative group hover:border-amber-500/50 transition">
+                        <div className="w-full h-36 flex items-center justify-center overflow-hidden bg-slate-950 rounded-lg relative">
+                          <img 
+                            src={item.dataUrl} 
+                            alt={item.file.name} 
+                            className="object-contain max-h-full max-w-full transition-transform duration-200"
+                            style={{ transform: `rotate(${item.rotation}deg)` }}
+                          />
+                          <span className="absolute top-1.5 left-1.5 bg-slate-900/80 text-amber-300 text-[10px] font-bold px-2 py-0.5 rounded border border-slate-700">
+                            #{idx + 1}
+                          </span>
+                        </div>
+
+                        <p className="text-xs font-medium text-slate-200 truncate">{item.file.name}</p>
+                        <p className="text-[10px] text-slate-400">{item.width} x {item.height} px • {(item.file.size / 1024).toFixed(1)} KB</p>
+
+                        <div className="flex items-center justify-between pt-2 border-t border-slate-800">
+                          <div className="flex items-center gap-1">
+                            <button disabled={idx === 0} onClick={() => moveJpgFile(idx, 'up')} className="p-1 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 rounded text-slate-300" title="Geser Ke Atas/Kiri">
+                              <ArrowUp className="w-3 h-3" />
+                            </button>
+                            <button disabled={idx === jpgFiles.length - 1} onClick={() => moveJpgFile(idx, 'down')} className="p-1 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 rounded text-slate-300" title="Geser Ke Bawah/Kanan">
+                              <ArrowDown className="w-3 h-3" />
+                            </button>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <button onClick={() => rotateJpgFile(idx, -90)} className="p-1 bg-slate-800 hover:bg-slate-700 rounded text-slate-300" title="Putar Kiri (-90°)">
+                              <RotateCcw className="w-3 h-3" />
+                            </button>
+                            <button onClick={() => rotateJpgFile(idx, 90)} className="p-1 bg-slate-800 hover:bg-slate-700 rounded text-slate-300" title="Putar Kanan (+90°)">
+                              <RotateCw className="w-3 h-3" />
+                            </button>
+                            <button onClick={() => removeJpgFile(idx)} className="p-1 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded" title="Hapus Berkas Gambar Ini">
+                              <Trash2 className="w-3 h-3" />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="h-full flex flex-col items-center justify-center text-slate-500 border border-dashed border-slate-700/60 rounded-xl bg-slate-900/20 p-8">
+                    <FileImage className="w-12 h-12 text-slate-600 mb-2" />
+                    <p className="text-xs font-medium text-slate-300">Belum Ada Gambar Dipilih</p>
+                    <p className="text-[11px] text-slate-500 mt-1">Pilih berkas JPG/PNG untuk ekstraksi ke Excel.</p>
+                  </div>
+                )}
+              </div>
             </section>
           </div>
         )}
