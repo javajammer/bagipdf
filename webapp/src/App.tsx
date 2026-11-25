@@ -80,15 +80,53 @@ interface PDFAnnotation {
   color: string;
 }
 
+const EXCEL_BATCH_FILE_LIMIT = 4000;
+const EXCEL_FILE_ROW_HEIGHT = 72;
+
 interface BatchPdfItem {
   id: string;
   file: File;
   relativePath?: string;
+  sourcePath?: string;
+  byteSize?: number;
   status: 'pending' | 'processing' | 'success' | 'error';
   pageCount?: number;
   rowCount?: number;
   errorMsg?: string;
   extractedRows?: string[][];
+}
+
+let tauriInvokeCache: ((cmd: string, args?: Record<string, unknown>) => Promise<unknown>) | null = null;
+
+async function tauriInvoke(cmd: string, args?: Record<string, unknown>) {
+  if (!tauriInvokeCache) {
+    const mod = await import('@tauri-apps/api/core');
+    tauriInvokeCache = mod.invoke;
+  }
+  return tauriInvokeCache(cmd, args);
+}
+
+function bytesFromInvoke(raw: unknown): Uint8Array {
+  if (raw instanceof ArrayBuffer) return new Uint8Array(raw);
+  if (ArrayBuffer.isView(raw)) {
+    const view = raw as ArrayBufferView;
+    return new Uint8Array(view.buffer, view.byteOffset, view.byteLength);
+  }
+  if (Array.isArray(raw)) return Uint8Array.from(raw as number[]);
+  throw new Error('Gagal membaca byte PDF');
+}
+
+async function readBatchPdfBytes(item: BatchPdfItem): Promise<Uint8Array> {
+  if (item.sourcePath) {
+    const raw = await tauriInvoke('read_pdf_bytes', { path: item.sourcePath });
+    return bytesFromInvoke(raw);
+  }
+  return new Uint8Array(await item.file.arrayBuffer());
+}
+
+async function releasePdfJsDocument(doc: any, task: any) {
+  try { await doc?.cleanup?.(); } catch {}
+  try { await task?.destroy?.(); } catch {}
 }
 
 type MainToolMode = 'split' | 'merge' | 'rotate' | 'lock' | 'watermark' | 'edit' | 'excel' | 'jpg2excel' | 'jpg2pdf';
@@ -231,6 +269,11 @@ export default function App() {
   const [excelPreviewSearch, setExcelPreviewSearch] = useState<string>('');
   const [excelPreviewPage, setExcelPreviewPage] = useState<number>(1);
   const [activeExcelTab, setActiveExcelTab] = useState<'files' | 'preview'>('files');
+  const [excelFileListScroll, setExcelFileListScroll] = useState(0);
+  const [excelFileListHeight, setExcelFileListHeight] = useState(560);
+  const excelFileListRef = useRef<HTMLDivElement>(null);
+  const excelFileListScrollRaf = useRef(0);
+  const excelFileListScrollPending = useRef(0);
 
   // --- DROPDOWN & ROTATE & JPG2PDF STATE ---
   const [convertDropdownOpen, setConvertDropdownOpen] = useState<boolean>(false);
@@ -1398,13 +1441,13 @@ export default function App() {
         }
 
         let filesToUse = pdfFiles;
-        if (pdfFiles.length > 2000) {
+        if (pdfFiles.length > EXCEL_BATCH_FILE_LIMIT) {
           showToastNotification(
-            'Batas Maksimal 2000 File',
-            `Terdeteksi ${pdfFiles.length} file PDF. 2000 file pertama dipilih untuk kestabilan & performa aplikasi.`,
+            `Batas Maksimal ${EXCEL_BATCH_FILE_LIMIT} File`,
+            `Terdeteksi ${pdfFiles.length} file PDF. ${EXCEL_BATCH_FILE_LIMIT} file pertama dipilih agar tetap stabil di 4 core / 8GB RAM.`,
             'info'
           );
-          filesToUse = pdfFiles.slice(0, 2000);
+          filesToUse = pdfFiles.slice(0, EXCEL_BATCH_FILE_LIMIT);
         } else {
           showToastNotification(
             'Folder Berhasil Dimuat',
@@ -1420,6 +1463,7 @@ export default function App() {
           status: 'pending'
         }));
 
+        setExcelFileListScroll(0);
         setExcelBatchItems(items);
         setExcelData([]);
         setExcelPreviewPage(1);
@@ -1444,13 +1488,13 @@ export default function App() {
     }
 
     let filesToUse = pdfFiles;
-    if (pdfFiles.length > 2000) {
+    if (pdfFiles.length > EXCEL_BATCH_FILE_LIMIT) {
       showToastNotification(
-        'Batas Maksimal 2000 File',
-        `Terdeteksi ${pdfFiles.length} file PDF. 2000 file pertama dipilih.`,
+        `Batas Maksimal ${EXCEL_BATCH_FILE_LIMIT} File`,
+        `Terdeteksi ${pdfFiles.length} file PDF. ${EXCEL_BATCH_FILE_LIMIT} file pertama dipilih.`,
         'info'
       );
-      filesToUse = pdfFiles.slice(0, 2000);
+      filesToUse = pdfFiles.slice(0, EXCEL_BATCH_FILE_LIMIT);
     }
 
     const items: BatchPdfItem[] = filesToUse.map(f => ({
@@ -1463,9 +1507,9 @@ export default function App() {
     let updatedItems: BatchPdfItem[] = [];
     setExcelBatchItems(prev => {
       const combined = [...prev, ...items];
-      if (combined.length > 2000) {
-        showToastNotification('Batas Maksimal 2000 File', 'Jumlah file dibatasi 2000 file PDF.', 'info');
-        updatedItems = combined.slice(0, 2000);
+      if (combined.length > EXCEL_BATCH_FILE_LIMIT) {
+        showToastNotification(`Batas Maksimal ${EXCEL_BATCH_FILE_LIMIT} File`, `Jumlah file dibatasi ${EXCEL_BATCH_FILE_LIMIT} file PDF.`, 'info');
+        updatedItems = combined.slice(0, EXCEL_BATCH_FILE_LIMIT);
       } else {
         updatedItems = combined;
       }
@@ -1485,8 +1529,7 @@ export default function App() {
     const fullText = items.map((it: any) => it.str).join(' ');
 
     try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      const row = await invoke<string[]>('parse_ebupot_pdf_text', { fullText, fileName });
+      const row = await tauriInvoke('parse_ebupot_pdf_text', { fullText, fileName }) as string[];
       return row.map(val => sanitizeFormulas ? sanitizeExcelCell(val) : val.trim());
     } catch (err: any) {
       throw new Error(err || 'Gagal mengekstrak Ebupot PDF');
@@ -1547,10 +1590,8 @@ export default function App() {
 
       const item = updatedBatchItems[idx];
       item.status = 'processing';
-      
-      // Throttle UI Updates to prevent React from freezing on low-end CPUs (e.g. 2 cores, 4GB RAM)
-      if (idx % 10 === 0 || idx === total - 1) {
-        setExcelBatchItems([...updatedBatchItems]);
+
+      if (idx % 20 === 0 || idx === total - 1) {
         setBatchProgress({
           current: idx + 1,
           total,
@@ -1560,9 +1601,19 @@ export default function App() {
         });
       }
 
+      let pdfBytes: Uint8Array | null = null;
+      let loadingTask: any = null;
+      let pdfJsDoc: any = null;
       try {
-        const arrayBuffer = await item.file.arrayBuffer();
-        const pdfJsDoc = await pdfjsLib.getDocument({ data: arrayBuffer, password: pdfPassword }).promise;
+        pdfBytes = await readBatchPdfBytes(item);
+        loadingTask = pdfjsLib.getDocument({
+          data: pdfBytes,
+          password: pdfPassword,
+          disableAutoFetch: true,
+          disableStream: true,
+          verbosity: 0,
+        });
+        pdfJsDoc = await loadingTask.promise;
         const pageCount = pdfJsDoc.numPages;
 
         const fileRows: string[][] = [];
@@ -1576,8 +1627,6 @@ export default function App() {
           for (let p = 1; p <= pageCount; p++) {
             const page = await pdfJsDoc.getPage(p);
             const textContent = await page.getTextContent();
-            
-            // Explicitly release memory immediately for large generic PDFs
             try { page.cleanup(); } catch (e) {}
 
             const rawItems = (textContent.items as any[]).filter(it => it.str && it.str.trim().length > 0);
@@ -1669,14 +1718,23 @@ export default function App() {
         item.status = 'error';
         item.errorMsg = err?.message || 'Gagal membaca PDF';
         errorCount++;
+      } finally {
+        await releasePdfJsDocument(pdfJsDoc, loadingTask);
+        pdfJsDoc = null;
+        loadingTask = null;
+        pdfBytes = null;
       }
 
-      // Force Garbage Collection Yield & Event Loop Breathing Room
-      if (idx % 25 === 0) {
-        // Sleep for 20ms to allow DOM repaints and memory GC on low-end CPUs
-        await new Promise(resolve => setTimeout(resolve, 20));
-      } else if (idx % 5 === 0 || idx === total - 1) {
-        await new Promise(resolve => setTimeout(resolve, 0));
+      if (idx % 25 === 0 || idx === total - 1) {
+        setExcelBatchItems(updatedBatchItems.slice());
+        setBatchProgress({
+          current: idx + 1,
+          total,
+          currentFileName: item.file.name,
+          successCount,
+          errorCount
+        });
+        await new Promise(resolve => setTimeout(resolve, 12));
       }
     }
 
@@ -1785,7 +1843,31 @@ export default function App() {
     });
   };
 
-  // Memoized Preview Filtering & Pagination for light DOM rendering up to 2000 files
+  React.useEffect(() => {
+    const el = excelFileListRef.current;
+    if (!el) return;
+    const measure = () => setExcelFileListHeight(el.clientHeight || 560);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [activeExcelTab, excelBatchItems.length]);
+
+  const onExcelFileListScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    excelFileListScrollPending.current = e.currentTarget.scrollTop;
+    if (excelFileListScrollRaf.current) return;
+    excelFileListScrollRaf.current = requestAnimationFrame(() => {
+      excelFileListScrollRaf.current = 0;
+      setExcelFileListScroll(excelFileListScrollPending.current);
+    });
+  };
+
+  const excelFileWindow = React.useMemo(() => {
+    const start = Math.max(0, Math.floor(excelFileListScroll / EXCEL_FILE_ROW_HEIGHT) - 6);
+    const count = Math.ceil(excelFileListHeight / EXCEL_FILE_ROW_HEIGHT) + 12;
+    const end = Math.min(excelBatchItems.length, start + count);
+    return { start, end, items: excelBatchItems.slice(start, end) };
+  }, [excelBatchItems, excelFileListScroll, excelFileListHeight]);
   const filteredPreviewRows = React.useMemo(() => {
     if (!excelData || excelData.length === 0) return [];
     const header = excelData[0];
@@ -3319,7 +3401,7 @@ export default function App() {
           </div>
         )}
 
-        {/* --- 5. PDF TO EXCEL SUITE (UP TO 2000 PDFS / FOLDER SUPPORT) --- */}
+        {/* --- 5. PDF TO EXCEL SUITE (UP TO 4000 PDFS / FOLDER SUPPORT) --- */}
         {mainTool === 'excel' && (
           <>
           {/* ── EBUPOT ACTIVATION MODAL ── */}
@@ -3461,7 +3543,7 @@ export default function App() {
                   <FileSpreadsheet className="w-5 h-5 text-indigo-400" />
                   <div>
                     <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wider">PDF ke Excel Batch</h3>
-                    <p className="text-[11px] text-slate-400">Konversi s/d 2.000 File PDF / Folder</p>
+                    <p className="text-[11px] text-slate-400">Konversi s/d 4.000 File PDF / Folder</p>
                   </div>
                 </div>
                 {excelBatchItems.length > 0 && (
@@ -3481,34 +3563,31 @@ export default function App() {
                       setIsLoadingFolder(true);
                       try {
                         const { invoke } = await import('@tauri-apps/api/core');
-                        const nativeFiles = await invoke<Array<{ name: string; path: string; bytes: number[] }> | null>('select_folder_dialog');
+                        const nativeFiles = await invoke<Array<{ name: string; path: string; size: number }> | null>('select_folder_dialog');
                         
                         if (nativeFiles && nativeFiles.length > 0) {
-                          // Sort native files from last to first (Z to A / numeric reverse)
                           const sortedNative = [...nativeFiles].sort((a, b) => 
                             b.name.localeCompare(a.name, undefined, { numeric: true, sensitivity: 'base' })
                           );
 
-                          const fileObjects = sortedNative.map(nf => {
-                            const blob = new Blob([new Uint8Array(nf.bytes)], { type: 'application/pdf' });
-                            return new File([blob], nf.name, { type: 'application/pdf' });
-                          });
-
-                          let filesToUse = fileObjects;
-                          if (fileObjects.length > 2000) {
-                            showToastNotification('Batas Maksimal 2000 File', `Terdeteksi ${fileObjects.length} file PDF. 2000 file pertama dipilih.`, 'info');
-                            filesToUse = fileObjects.slice(0, 2000);
+                          let filesToUse = sortedNative;
+                          if (sortedNative.length > EXCEL_BATCH_FILE_LIMIT) {
+                            showToastNotification(`Batas Maksimal ${EXCEL_BATCH_FILE_LIMIT} File`, `Terdeteksi ${sortedNative.length} file PDF. ${EXCEL_BATCH_FILE_LIMIT} file pertama dipilih.`, 'info');
+                            filesToUse = sortedNative.slice(0, EXCEL_BATCH_FILE_LIMIT);
                           } else {
-                            showToastNotification('Folder Berhasil Dimuat', `Ditemukan ${fileObjects.length} file PDF di dalam folder (diurutkan file terakhir ke terawal).`, 'success');
+                            showToastNotification('Folder Berhasil Dimuat', `Ditemukan ${sortedNative.length} file PDF di dalam folder (diurutkan file terakhir ke terawal).`, 'success');
                           }
 
-                          const items: BatchPdfItem[] = filesToUse.map(f => ({
+                          const items: BatchPdfItem[] = filesToUse.map(nf => ({
                             id: Math.random().toString(36).substring(2, 9),
-                            file: f,
-                            relativePath: f.name,
+                            file: new File([], nf.name, { type: 'application/pdf' }),
+                            relativePath: nf.name,
+                            sourcePath: nf.path,
+                            byteSize: nf.size,
                             status: 'pending'
                           }));
 
+                          setExcelFileListScroll(0);
                           setExcelBatchItems(items);
                           setExcelData([]);
                           setExcelPreviewPage(1);
@@ -3821,15 +3900,24 @@ export default function App() {
                       <FolderOpen className="w-14 h-14 text-slate-600 mb-3" />
                       <h4 className="text-sm font-semibold text-slate-300">Belum Ada Folder Atau File PDF Diberikan</h4>
                       <p className="text-xs text-slate-400 mt-1 max-w-sm text-center">
-                        Klik tombol <strong>"📁 Pilih Folder"</strong> untuk membaca seluruh file PDF di dalam folder, atau pilih beberapa file PDF sekaligus hingga 2.000 file.
+                        Klik tombol <strong>"📁 Pilih Folder"</strong> untuk membaca seluruh file PDF di dalam folder, atau pilih beberapa file PDF sekaligus hingga 4.000 file.
                       </p>
                     </div>
                   ) : (
-                    <div className="flex-1 overflow-y-auto space-y-2 pr-1">
-                      {excelBatchItems.map((item, idx) => (
+                    <div
+                      ref={excelFileListRef}
+                      className="flex-1 overflow-y-auto pr-1"
+                      onScroll={onExcelFileListScroll}
+                    >
+                      <div style={{ height: excelBatchItems.length * EXCEL_FILE_ROW_HEIGHT, position: 'relative' }}>
+                      {excelFileWindow.items.map((item, offset) => {
+                        const idx = excelFileWindow.start + offset;
+                        const sizeBytes = item.byteSize || item.file.size;
+                        return (
                         <div
                           key={item.id}
-                          className="bg-slate-900/70 border border-slate-700/50 rounded-xl p-3 flex items-center justify-between gap-3 hover:border-slate-600 transition"
+                          style={{ position: 'absolute', top: idx * EXCEL_FILE_ROW_HEIGHT, left: 0, right: 0, height: EXCEL_FILE_ROW_HEIGHT - 8 }}
+                          className="bg-slate-900/70 border border-slate-700/50 rounded-xl px-3 flex items-center justify-between gap-3 hover:border-slate-600 transition"
                         >
                           <div className="flex items-center gap-3 min-w-0">
                             <span className="w-6 h-6 rounded-full bg-slate-800 text-slate-300 text-[11px] font-bold flex items-center justify-center flex-shrink-0 border border-slate-700">
@@ -3838,7 +3926,7 @@ export default function App() {
                             <div className="min-w-0">
                               <p className="text-xs font-semibold text-slate-200 truncate">{item.file.name}</p>
                               <p className="text-[10px] text-slate-400 truncate">
-                                {item.relativePath !== item.file.name ? item.relativePath : `${(item.file.size / (1024 * 1024)).toFixed(2)} MB`}
+                                {item.relativePath && item.relativePath !== item.file.name ? item.relativePath : `${(sizeBytes / (1024 * 1024)).toFixed(2)} MB`}
                               </p>
                             </div>
                           </div>
@@ -3877,7 +3965,9 @@ export default function App() {
                             )}
                           </div>
                         </div>
-                      ))}
+                        );
+                      })}
+                      </div>
                     </div>
                   )}
                 </div>
